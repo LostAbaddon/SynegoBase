@@ -1,0 +1,29 @@
+{
+  "comment": "This is an example configuration for SynegoBase Nginx setup.",
+  "http_port": 8080,
+  "server_name": "localhost",
+  "worker_connections": 1024,
+  "comment_worker_connections": "Sets the max simultaneous connections per worker. If you see a 'exceed open file resource limit' warning on startup, your OS has a lower limit. You can either lower this value to match your OS limit (e.g., 256) or increase your OS's file limit (ulimit).",
+  "logs": {
+    "comment": "Paths are relative to your project root where you run the script.",
+    "dir": "./logs/nginx"
+  },
+  "static_serving": [
+    {
+      "comment": "Each object in this array defines a static serving location.",
+      "url_path": "/static",
+      "root_path": "./public"
+    },
+    {
+      "comment": "You can have multiple static directories.",
+      "url_path": "/assets",
+      "root_path": "./assets"
+    }
+  ],
+  "reverse_proxy": {
+    "comment": "Proxy requests to your backend application.",
+    "enabled": true,
+    "url_path": "/",
+    "pass_to": "http://localhost:3000"
+  }
+}
