@@ -117,10 +117,6 @@ npx synego start
 - **Paxos/Raft 集成:** 消除主节点的单点故障风险。
 - **背压机制:** 在高负载下优雅地处理服务降级。
 
-## 如何贡献
-
-我们欢迎所有形式的贡献！请阅读我们的 [CONTRIBUTING.md](CONTRIBUTING.md) 文件来了解如何帮助我们。
-
 ## 许可证
 
 本项目采用 [MIT](./LICENSE) 许可证。
