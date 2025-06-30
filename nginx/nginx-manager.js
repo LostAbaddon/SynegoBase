@@ -11,7 +11,10 @@ const logger = new Logger('Nginx');
 
 const DefaultConfig = {
 	server_name: "localhost",
-	http_port: 8080,
+	http: {
+		enabled: true,
+		port: 8080,
+	},
 	https: {
 		enabled: false,
 		port: 8443,
@@ -121,7 +124,7 @@ function generateNginxConfig(config, callingProjectRoot) {
 		fs.mkdirSync(logDir, { recursive: true });
 	}
 
-	let locationBlocks = [];
+	let locationBlocks = [], grpcBlocks = [], streamBlocks = [];
 	// 静态资源服务
 	if (!isArray(config.static_serving)) config.static_serving = [config.static_serving];
 	config.static_serving.forEach(serving => {
@@ -132,10 +135,10 @@ function generateNginxConfig(config, callingProjectRoot) {
 			type = 'root';
 		}
 		let block = `
-    location ${serving.url_path} {
-      ${type} ${staticRoot.replace(/\\/g, '/')}/;
-      autoindex on;
-    }`;
+		location ${serving.url_path} {
+			${type} ${staticRoot.replace(/\\/g, '/')}/;
+			autoindex on;
+		}`;
 		locationBlocks.push([serving.url_path.length, block]);
 	});
 
@@ -149,25 +152,10 @@ function generateNginxConfig(config, callingProjectRoot) {
 			type = 'root';
 		}
 		let block = `
-    location ${serving.url_path} {
-      ${type} ${spaRoot.replace(/\\/g, '/')}/;
-      try_files $uri $uri/ /index.html;
-    }`;
-		locationBlocks.push([serving.url_path.length, block]);
-	});
-
-	// API反向代理
-	if (!isArray(config.reverse_proxy)) config.reverse_proxy = [config.reverse_proxy];
-	config.reverse_proxy.forEach(serving => {
-		if (!serving || !serving.url_path || !serving.pass_to || (serving.enabled === false) || (serving.enabled === "false")) return;
-		let block = `
-    location ${serving.url_path} {
-      proxy_pass ${serving.pass_to};
-      proxy_set_header Host $host;
-      proxy_set_header X-Real-IP $remote_addr;
-      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
-    }`;
+		location ${serving.url_path} {
+			${type} ${spaRoot.replace(/\\/g, '/')}/;
+			try_files $uri $uri/ /index.html;
+		}`;
 		locationBlocks.push([serving.url_path.length, block]);
 	});
 
@@ -180,115 +168,201 @@ function generateNginxConfig(config, callingProjectRoot) {
 		const maxBodySize = config.upload.max_body_size || '100m';
 
 		let block = `
-    location ${config.upload.url_path} {
-      client_body_in_file_only on;
-      client_body_temp_path ${tempPath.replace(/\\/g, '/')};
-      client_max_body_size ${maxBodySize};
-      
-      proxy_pass ${config.upload.pass_to};
-      
-      proxy_set_header Content-Disposition $http_content_disposition;
-      proxy_set_header X-Content-Type $http_content_type;
-      proxy_set_header X-File-Path $request_body_file;
-      
-      proxy_set_header Host $host;
-      proxy_set_header X-Real-IP $remote_addr;
-      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
-      
-      proxy_set_body off; 
-      proxy_redirect off;
-    }`;
+		location ${config.upload.url_path} {
+			client_body_in_file_only on;
+			client_body_temp_path ${tempPath.replace(/\\/g, '/')};
+			client_max_body_size ${maxBodySize};
+
+			proxy_pass ${config.upload.pass_to};
+
+			proxy_set_header Content-Disposition $http_content_disposition;
+			proxy_set_header X-Content-Type $http_content_type;
+			proxy_set_header X-File-Path $request_body_file;
+
+			proxy_set_header Host $host;
+			proxy_set_header X-Real-IP $remote_addr;
+			proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+			proxy_set_header X-Forwarded-Proto $scheme;
+
+			proxy_set_body off;
+			proxy_redirect off;
+		}`;
 		locationBlocks.push([config.upload.url_path.length, block]);
 	}
 
+	// API反向代理、WebSocket、gRPC、TCP、UDP
+	if (!isArray(config.reverse_proxy)) config.reverse_proxy = [config.reverse_proxy];
+	config.reverse_proxy.forEach(serving => {
+		if (!serving || !serving.pass_to || (serving.enabled === false)) return;
+
+		let block;
+
+		if (serving.type === 'tcp') {
+			if (!serving.port)return;
+			block = `
+	server {
+		listen                ${serving.port};
+		proxy_pass            ${serving.pass_to};
+		proxy_timeout         ${serving.timeout || "10s"};
+		proxy_connect_timeout ${serving.connect_timeout || "5s"};
+	}`;
+			streamBlocks.push(block);
+			return;
+		}
+		else if (serving.type === 'udp') {
+			if (!serving.port)return;
+			block = `
+	server {
+		listen          ${serving.port} udp;
+		proxy_pass      ${serving.pass_to};
+		proxy_responses 1;
+	}`;
+			streamBlocks.push(block);
+			return;
+		}
+		else if (!serving.url_path) {
+			return;
+		}
+
+		// 如果是 WebSocket 请求
+		if (serving.type === "websocket") {
+			block = `
+		location ${serving.url_path} {
+			proxy_pass ${serving.pass_to};
+			proxy_set_header Host $host;
+			proxy_http_version 1.1;
+			proxy_set_header Upgrade $http_upgrade;
+			proxy_set_header Connection "upgrade";
+			proxy_set_header X-Real-IP $remote_addr;
+			proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+			proxy_set_header X-Forwarded-Proto $scheme;
+		}`;
+		}
+		// 如果是 gRPC 请求
+		if (serving.type === "grpc") {
+			block = `
+		location ${serving.url_path} {
+			grpc_pass         ${serving.pass_to};
+			grpc_read_timeout 300s;
+			grpc_send_timeout 300s;
+		}`;
+			grpcBlocks.push(block);
+			return;
+		}
+		// 普通请求
+		else {
+			block = `
+		location ${serving.url_path} {
+			proxy_pass ${serving.pass_to};
+			proxy_set_header Host $host;
+			proxy_set_header X-Real-IP $remote_addr;
+			proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+			proxy_set_header X-Forwarded-Proto $scheme;
+		}`;
+		}
+		locationBlocks.push([serving.url_path.length, block]);
+	});
+
 	locationBlocks.sort((ba, bb) => ba[0] - bb[0]);
 	const locations = locationBlocks.map(block => block[1]).join('');
+	const grpcs     = grpcBlocks.join('');
+	const streams   = streamBlocks.length > 0 ? 'stream {' + streamBlocks.join('') + '\n}' : '';
 
 	let http_server_block = '';
 	let https_server_block = '';
 
-	const https_config = config.https || {};
+	const https_config = config.https || {}, http_config = config.http || {};
+
+	const http_enabled = http_config.enabled === false ? false : true;
+	http_config.port = http_config.port || DefaultConfig.http.port;
+
 	const cert_path = https_config.ssl_certificate ? path.resolve(callingProjectRoot, https_config.ssl_certificate) : null;
 	const key_path = https_config.ssl_certificate_key ? path.resolve(callingProjectRoot, https_config.ssl_certificate_key) : null;
-	const https_enabled = https_config.enabled && cert_path && key_path && fs.existsSync(cert_path) && fs.existsSync(key_path);
-	const http_available = !https_enabled || !https_config.force_https_redirect;
+	const https_enabled = (https_config.enabled !== false) && cert_path && key_path && fs.existsSync(cert_path) && fs.existsSync(key_path);
 	https_config.port = https_config.port || DefaultConfig.https.port;
+
+	if (https_config.force_https_redirect !== false) https_config.force_https_redirect = true;
+	const http_available = !https_enabled || !https_config.force_https_redirect;
 
 	// HTTPS server block
 	if (https_enabled) {
 		https_server_block = `
-  server {
-    listen       ${https_config.port} ssl http2;
-    listen       [::]:${https_config.port} ssl http2;
-    server_name  ${config.server_name};
+	server {
+		listen       ${https_config.port} ssl http2;
+		listen       [::]:${https_config.port} ssl http2;
+		server_name  ${config.server_name};
 
-    ssl_certificate      "${cert_path.replace(/\\/g, '/')}";
-    ssl_certificate_key  "${key_path.replace(/\\/g, '/')}";
+		ssl_certificate      "${cert_path.replace(/\\/g, '/')}";
+		ssl_certificate_key  "${key_path.replace(/\\/g, '/')}";
 
-    ssl_protocols        TLSv1.2 TLSv1.3;
-    ssl_ciphers          'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
-    ssl_prefer_server_ciphers on;
+		ssl_session_cache    shared:SSL:10m;
+		ssl_session_timeout  5m;
+		ssl_protocols        TLSv1.2 TLSv1.3;
+		ssl_ciphers          'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+		ssl_prefer_server_ciphers on;
 
-    ssl_session_cache    shared:SSL:1m;
-    ssl_session_timeout  5m;
-
-    ${locations}
-  }`;
+		${locations}
+		${grpcs}
+	}`;
 	}
 
 	// HTTP server block
-	if (http_available) {
-		http_server_block = `
-  server {
-    listen       ${config.http_port};
-    listen       [::]:${config.http_port};
-    server_name  ${config.server_name};
-    ${locations}
-  }`;
-	}
-	// Force redirect to HTTPS
-	else {
-		const redirectUrl = (https_config.port === 443) ? 'https://$host$request_uri' : `https://$host:${https_config.port}$request_uri`;
-		http_server_block = `
-  server {
-    listen       ${config.http_port};
-    listen       [::]:${config.http_port};
-    server_name  ${config.server_name};
-    return       301 ${redirectUrl};
-  }`;
+	if (http_enabled) {
+		// No force redirect to HTTPS
+		if (http_available) {
+			http_server_block = `
+	server {
+		listen       ${http_config.port};
+		listen       [::]:${http_config.port};
+		server_name  ${config.server_name};
+		${locations}
+	}`;
+		}
+		// Force redirect to HTTPS
+		else {
+			const redirectUrl = (https_config.port === 443) ? 'https://$host$request_uri' : `https://$host:${https_config.port}$request_uri`;
+			http_server_block = `
+	server {
+		listen       ${http_config.port};
+		listen       [::]:${http_config.port};
+		server_name  ${config.server_name};
+		return       301 ${redirectUrl};
+	}`;
+		}
 	}
 
 	return `worker_processes  auto;
 error_log  "${path.join(logDir, 'error.log').replace(/\\/g, '/')}" warn;
 pid        "${path.join(logDir, 'nginx.pid').replace(/\\/g, '/')}";
 events {
-  worker_connections  ${config.worker_connections};
+	worker_connections  ${config.worker_connections};
 }
 
+${streams}
+
 http {
-  include            mime.types;
-  default_type       application/octet-stream;
+	include            mime.types;
+	default_type       application/octet-stream;
 
-  log_format  main   '$remote_addr - $remote_user [$time_local] "$request" '
-                       '$status $body_bytes_sent "$http_referer" '
-                       '"$http_user_agent" "$http_x_forwarded_for"';
-  access_log         "${path.join(logDir, 'access.log').replace(/\\/g, '/')}"  main;
+	log_format  main   '$remote_addr - $remote_user [$time_local] "$request" '
+	                     '$status $body_bytes_sent "$http_referer" '
+	                     '"$http_user_agent" "$http_x_forwarded_for"';
+	access_log         "${path.join(logDir, 'access.log').replace(/\\/g, '/')}"  main;
   
-  sendfile           on;
-  tcp_nopush         on;
-  keepalive_timeout  65;
+	sendfile           on;
+	tcp_nopush         on;
+	keepalive_timeout  65;
 
-  gzip               on;
-  gzip_vary          on;
-  gzip_proxied       any;
-  gzip_comp_level    6;
-  gzip_buffers       16 8k;
-  gzip_http_version  1.1;
-  gzip_types         text/plain text/css application/json text/javascript application/javascript text/xml application xml application/xml+rss;
+	gzip               on;
+	gzip_vary          on;
+	gzip_proxied       any;
+	gzip_comp_level    6;
+	gzip_buffers       16 8k;
+	gzip_http_version  1.1;
+	gzip_types         text/plain text/css application/json text/javascript application/javascript text/xml application xml application/xml+rss;
   
-  ${http_server_block}
-  ${https_server_block}
+	${http_server_block}
+	${https_server_block}
 }`;
 }
 

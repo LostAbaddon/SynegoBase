@@ -1,7 +1,11 @@
 {
   "comment": "This is an example configuration for SynegoBase Nginx setup.",
   "server_name": "localhost",
-  "http_port": 8080,
+  "http": {
+    "comment": "Enable HTTP.",
+    "enabled": true,
+    "port": 8080
+  },
   "https": {
     "comment": "Enable HTTPS by providing SSL certificate and key paths.",
     "enabled": true,
@@ -40,19 +44,49 @@
       "root_path": "./client/my-vue-app/dist"
     }
   ],
-  "reverse_proxy": [
-    {
-      "comment": "Proxy requests to your backend application.",
-      "enabled": true,
-      "url_path": "/",
-      "pass_to": "http://localhost:3000"
-    }
-  ],
   "upload": {
     "comment": "This block handles file uploads, saving them to a temp directory and passing the path to a backend handler.",
     "url_path": "/upload",
     "temp_path": "./temp_uploads",
     "pass_to": "http://localhost:3000/upload-callback",
     "max_body_size": "100m"
-  }
+  },
+  "reverse_proxy": [
+    {
+      "comment": "Proxy requests to your backend application.",
+      "enabled": true,
+      "url_path": "/api/",
+      "pass_to": "http://localhost:3000/"
+    },
+    {
+      "comment": "This proxies requests to a WebSocket server.",
+      "enabled": true,
+      "type": "websocket",
+      "url_path": "/ws/",
+      "pass_to": "http://localhost:3001/"
+    },
+    {
+      "comment": "This proxies requests to a gRPC server.",
+      "enabled": true,
+      "type": "grpc",
+      "url_path": "/grpc",
+      "pass_to": "grpc://localhost:3002"
+    },
+    {
+      "comment": "This proxies requests to a TCP server.",
+      "enabled": true,
+      "type": "tcp",
+      "port": 12345,
+      "pass_to": "localhost:3003",
+      "timeout": "10s",
+      "connect_timeout": "5s"
+    },
+    {
+      "comment": "This proxies requests to a UDP server.",
+      "enabled": true,
+      "type": "udp",
+      "port": 12346,
+      "pass_to": "localhost:3004"
+    }
+  ]
 }
