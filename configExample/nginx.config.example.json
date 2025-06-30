@@ -1,8 +1,16 @@
 {
   "comment": "This is an example configuration for SynegoBase Nginx setup.",
-  "http_port": 8080,
   "server_name": "localhost",
-  "worker_connections": 1024,
+  "http_port": 8080,
+  "https": {
+    "comment": "Enable HTTPS by providing SSL certificate and key paths.",
+    "enabled": true,
+    "port": 8443,
+    "force_https_redirect": true,
+    "ssl_certificate": "./certs/fullchain.pem",
+    "ssl_certificate_key": "./certs/privkey.pem"
+  },
+  "worker_connections": 256,
   "comment_worker_connections": "Sets the max simultaneous connections per worker. If you see a 'exceed open file resource limit' warning on startup, your OS has a lower limit. You can either lower this value to match your OS limit (e.g., 256) or increase your OS's file limit (ulimit).",
   "logs": {
     "comment": "Paths are relative to your project root where you run the script.",
