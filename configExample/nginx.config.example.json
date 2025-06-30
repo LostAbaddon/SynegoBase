@@ -20,6 +20,13 @@
       "root_path": "./assets"
     }
   ],
+  "spa_serving": [
+    {
+      "comment": "This block serves a Vue/React/Angular SPA using history mode.",
+      "url_path": "/my-vue-app",
+      "root_path": "./client/my-vue-app/dist"
+    }
+  ],
   "reverse_proxy": {
     "comment": "Proxy requests to your backend application.",
     "enabled": true,

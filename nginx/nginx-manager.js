@@ -105,10 +105,27 @@ function generateNginxConfig(config, callingProjectRoot) {
 	if (Array.isArray(config.static_serving)) {
 		staticBlocks = config.static_serving.map(serving => {
 			const staticRoot = path.resolve(callingProjectRoot, serving.root_path);
+			let block, type = 'root';
+			if (serving.type === 'alias') {
+				type = 'alias'
+			}
+			block = `
+    location ${serving.url_path} {
+      ${type} ${staticRoot.replace(/\\/g, '/')}/;
+      autoindex on;
+    }`;
+			return block;
+		}).join('');
+	}
+
+	let spaBlocks = '';
+	if (Array.isArray(config.spa_serving)) {
+		spaBlocks = config.spa_serving.map(serving => {
+			const spaRoot = path.resolve(callingProjectRoot, serving.root_path);
 			return `
     location ${serving.url_path} {
-      alias ${staticRoot.replace(/\\/g, '/')};
-      autoindex on;
+      root ${spaRoot.replace(/\\/g, '/')};
+      try_files $uri $uri/ /index.html;
     }`;
 		}).join('');
 	}
@@ -145,7 +162,7 @@ http {
   
   server {
     listen       ${config.http_port};
-    server_name  ${config.server_name};${staticBlocks}${proxyBlock}
+    server_name  ${config.server_name};${staticBlocks}${spaBlocks}${proxyBlock}
   }
 }`;
 }
@@ -154,13 +171,27 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 	const defaultConfig = {
 		http_port: 8080,
 		server_name: "localhost",
-        worker_connections: 1024,
+		worker_connections: 256,
 		logs: { dir: "./logs/nginx" },
 		static_serving: [
 			{ url_path: "/static", root_path: "./public" }
 		],
+		spa_serving: [],
 		reverse_proxy: { enabled: true, url_path: "/", pass_to: "http://localhost:3000" }
 	};
+
+	// 如果传入的是地址，则读取真正的配置文件
+	if (isString(userConfig)) {
+		userConfig = path.join(process.cwd(), userConfig);
+		try {
+			const data = fs.readFileSync(userConfig);
+			userConfig = JSON.parse(data);
+		}
+		catch (err) {
+			logger.error('Read User Config Failed:', err);
+			userConfig = {};
+		}
+	}
 
 	const finalConfig = deepMerge(defaultConfig, userConfig);
 
@@ -186,6 +217,8 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 			logger.log(`Backed up existing config to ${backupPath}`);
 		}
 		const newConfigContent = generateNginxConfig(finalConfig, callingProjectRoot);
+		logger.info("New Nginx Configuration Generated:");
+		console.info(newConfigContent);
 		fs.writeFileSync(configPath, newConfigContent);
 		logger.log('Successfully wrote new nginx.conf.');
 		configWritten = true;
@@ -201,94 +234,97 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 }
 
 function copyControlScripts(callingProjectRoot) {
-    logger.log('Copying and configuring control scripts to your project root...');
-    const sourceDir = path.resolve(__dirname); // The 'nginx' directory
-    const targetDir = callingProjectRoot;
-    const scripts = ['start-nginx.sh', 'stop-nginx.sh', 'restart-nginx.sh', 'start-nginx.bat', 'stop-nginx.bat', 'restart-nginx.bat'];
+	logger.log('Copying and configuring control scripts to your project root...');
+	const sourceDir = path.resolve(__dirname); // The 'nginx' directory
+	const targetDir = callingProjectRoot;
+	const scripts = ['start-nginx.sh', 'stop-nginx.sh', 'restart-nginx.sh', 'start-nginx.bat', 'stop-nginx.bat', 'restart-nginx.bat'];
 
-    // The absolute path to the synegobase library's main entry point (index.js)
-    const synegoBasePath = path.resolve(sourceDir, '..', 'index.js');
-    // For the require() statement, we need to escape backslashes on Windows
-    const requirePath = synegoBasePath.replace(/\\/g, '\\\\');
+	// The absolute path to the synegobase library's main entry point (index.js)
+	const synegoBasePath = path.resolve(sourceDir, '..', 'index.js');
+	// For the require() statement, we need to escape backslashes on Windows
+	const requirePath = synegoBasePath.replace(/\\/g, '\\\\');
 
-    scripts.forEach(scriptName => {
-        const sourceFile = path.join(sourceDir, scriptName);
-        const targetFile = path.join(targetDir, scriptName);
+	scripts.forEach(scriptName => {
+		const sourceFile = path.join(sourceDir, scriptName);
+		const targetFile = path.join(targetDir, scriptName);
 
-        if (fs.existsSync(sourceFile)) {
-            try {
-                // Read the template content
-                const templateContent = fs.readFileSync(sourceFile, 'utf-8');
-                // Replace the placeholder with the actual, escaped path
-                const finalContent = templateContent.replace('__SYNEGOBASE_PATH__', requirePath);
-                // Write the new content to the target file
-                fs.writeFileSync(targetFile, finalContent);
+		if (fs.existsSync(sourceFile)) {
+			try {
+				// Read the template content
+				const templateContent = fs.readFileSync(sourceFile, 'utf-8');
+				// Replace the placeholder with the actual, escaped path
+				const finalContent = templateContent.replace('__SYNEGOBASE_PATH__', requirePath);
+				// Write the new content to the target file
+				fs.writeFileSync(targetFile, finalContent);
 
-                logger.log(`- Created ${scriptName}`);
-                if (scriptName.endsWith('.sh')) {
-                    fs.chmodSync(targetFile, '755');
-                }
-            } catch (error) {
-                logger.error(`Failed to create ${scriptName}:`, error.message);
-            }
-        }
-    });
-    logger.log('Control scripts are ready in your project root.');
+				logger.log(`- Created ${scriptName}`);
+				if (scriptName.endsWith('.sh')) {
+					fs.chmodSync(targetFile, '755');
+				}
+			}
+			catch (error) {
+				logger.error(`Failed to create ${scriptName}:`, error.message);
+			}
+		}
+	});
+	logger.log('Control scripts are ready in your project root.');
 }
 
 function controlNginx(action) {
-    if (!checkNginxInstalled()) {
-        logger.error('Nginx is not installed. Please run setup first.');
-        return;
-    }
-    let command;
-    switch (platform) {
-        case 'darwin':
-            command = `${getBrewPrefix()}/bin/brew services ${action} nginx`;
-            break;
-        case 'linux':
-            command = `sudo systemctl ${action} nginx`;
-            break;
-        case 'win32':
-            const nginxPath = path.dirname(runCommand('where nginx'));
-            const actionMap = { start: 'start nginx', stop: 'nginx -s stop', restart: 'nginx -s reload' };
-            command = `cd ${nginxPath} && ${actionMap[action]}`;
-            break;
-        default:
-            logger.error(`Unsupported platform: ${platform}`);
-            return;
-    }
+	if (!checkNginxInstalled()) {
+		logger.error('Nginx is not installed. Please run setup first.');
+		return;
+	}
+	let command;
+	switch (platform) {
+		case 'darwin':
+			command = `${getBrewPrefix()}/bin/brew services ${action} nginx`;
+			break;
+		case 'linux':
+			command = `sudo systemctl ${action} nginx`;
+			break;
+		case 'win32':
+			const nginxPath = path.dirname(runCommand('where nginx'));
+			const actionMap = { start: 'start nginx', stop: 'nginx -s stop', restart: 'nginx -s reload' };
+			command = `cd ${nginxPath} && ${actionMap[action]}`;
+			break;
+		default:
+			logger.error(`Unsupported platform: ${platform}`);
+			return;
+	}
 
-    logger.log(`Executing: ${command}`);
-    
-    // We need to capture stderr to analyze it, so we can't use 'inherit' directly
-    let stderr = '';
-    try {
-        execSync(command, {
-            stdio: ['pipe', 'pipe', 'pipe'] // stdin, stdout, stderr
-        });
-        logger.log(`Nginx service command for '${action}' executed successfully.`);
-    } catch (error) {
-        stderr = error.stderr ? error.stderr.toString() : '';
-        
-        logger.error(`The command to '${action}' Nginx failed.`);
+	logger.log(`Executing: ${command}`);
 
-        if (platform === 'darwin' && stderr.includes('Bootstrap failed')) {
-            logger.warn("macOS Service Error Detected.");
-            logger.log("This is a common issue with Homebrew services if the service fails to start immediately.");
-            logger.log("The 'brew services' command may show a success message, but the underlying service has failed.");
-            logger.log("SUGGESTED ACTIONS:");
-            logger.log("1. Check your Nginx configuration syntax: nginx -t");
-            logger.log("2. Check the Nginx error log, likely in your project's 'logs' directory.");
-            logger.log("3. If the problem persists, try the full reset process: brew reinstall nginx");
-        } else {
-            logger.error("An unexpected error occurred.");
-            if (stderr) {
-                logger.log("Error details (stderr):");
-                console.error(stderr);
-            }
-        }
-    }
+	// We need to capture stderr to analyze it, so we can't use 'inherit' directly
+	let stderr = '';
+	try {
+		execSync(command, {
+			stdio: ['pipe', 'pipe', 'pipe'] // stdin, stdout, stderr
+		});
+		logger.log(`Nginx service command for '${action}' executed successfully.`);
+	}
+	catch (error) {
+		stderr = error.stderr ? error.stderr.toString() : '';
+
+		logger.error(`The command to '${action}' Nginx failed.`);
+
+		if (platform === 'darwin' && stderr.includes('Bootstrap failed')) {
+			logger.warn("macOS Service Error Detected.");
+			logger.log("This is a common issue with Homebrew services if the service fails to start immediately.");
+			logger.log("The 'brew services' command may show a success message, but the underlying service has failed.");
+			logger.log("SUGGESTED ACTIONS:");
+			logger.log("1. Check your Nginx configuration syntax: nginx -t");
+			logger.log("2. Check the Nginx error log, likely in your project's 'logs' directory.");
+			logger.log("3. If the problem persists, try the full reset process: brew reinstall nginx");
+		}
+		else {
+			logger.error("An unexpected error occurred.");
+			if (stderr) {
+				logger.log("Error details (stderr):");
+				console.error(stderr);
+			}
+		}
+	}
 }
 
 module.exports = {
