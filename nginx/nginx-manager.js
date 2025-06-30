@@ -101,46 +101,58 @@ function generateNginxConfig(config, callingProjectRoot) {
 		fs.mkdirSync(logDir, { recursive: true });
 	}
 
-	let staticBlocks = '';
-	if (Array.isArray(config.static_serving)) {
-		staticBlocks = config.static_serving.map(serving => {
-			const staticRoot = path.resolve(callingProjectRoot, serving.root_path);
-			let block, type = 'root';
-			if (serving.type === 'alias') {
-				type = 'alias'
-			}
-			block = `
+	let blocks = [];
+	// 静态资源服务
+	if (!isArray(config.static_serving)) config.static_serving = [config.static_serving];
+	config.static_serving.forEach(serving => {
+		if (!serving || !serving.url_path || !serving.root_path) return;
+		const staticRoot = path.resolve(callingProjectRoot, serving.root_path);
+		let type = 'alias';
+		if (serving.type === 'root') {
+			type = 'root';
+		}
+		let block = `
     location ${serving.url_path} {
       ${type} ${staticRoot.replace(/\\/g, '/')}/;
       autoindex on;
     }`;
-			return block;
-		}).join('');
-	}
+		blocks.push([serving.url_path.length, block]);
+	});
 
-	let spaBlocks = '';
-	if (Array.isArray(config.spa_serving)) {
-		spaBlocks = config.spa_serving.map(serving => {
-			const spaRoot = path.resolve(callingProjectRoot, serving.root_path);
-			return `
+	// SPA站点服务
+	if (!isArray(config.spa_serving)) config.spa_serving = [config.spa_serving];
+	config.spa_serving.forEach(serving => {
+		if (!serving || !serving.url_path || !serving.root_path) return;
+		const spaRoot = path.resolve(callingProjectRoot, serving.root_path);
+		let type = 'alias';
+		if (serving.type === 'root') {
+			type = 'root';
+		}
+		let block = `
     location ${serving.url_path} {
-      root ${spaRoot.replace(/\\/g, '/')};
+      ${type} ${spaRoot.replace(/\\/g, '/')}/;
       try_files $uri $uri/ /index.html;
     }`;
-		}).join('');
-	}
+		blocks.push([serving.url_path.length, block]);
+	});
 
-	let proxyBlock = '';
-	if (config.reverse_proxy && config.reverse_proxy.enabled) {
-		proxyBlock = `
-    location ${config.reverse_proxy.url_path} {
-      proxy_pass ${config.reverse_proxy.pass_to};
+	// API反向代理
+	if (!isArray(config.reverse_proxy)) config.reverse_proxy = [config.reverse_proxy];
+	config.reverse_proxy.forEach(serving => {
+		if (!serving || !serving.url_path || !serving.pass_to || (serving.enabled === false) || (serving.enabled === "false")) return;
+		let block = `
+    location ${serving.url_path} {
+      proxy_pass ${serving.pass_to};
       proxy_set_header Host $host;
       proxy_set_header X-Real-IP $remote_addr;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
       proxy_set_header X-Forwarded-Proto $scheme;
     }`;
-	}
+		blocks.push([serving.url_path.length, block]);
+	});
+
+	blocks.sort((ba, bb) => ba[0] - bb[0]);
+	blocks = blocks.map(block => block[1]).join('');
 
 	return `
 worker_processes  1;
@@ -162,7 +174,7 @@ http {
   
   server {
     listen       ${config.http_port};
-    server_name  ${config.server_name};${staticBlocks}${spaBlocks}${proxyBlock}
+    server_name  ${config.server_name};${blocks}
   }
 }`;
 }
