@@ -151,11 +151,41 @@ function generateNginxConfig(config, callingProjectRoot) {
 		blocks.push([serving.url_path.length, block]);
 	});
 
+	// 文件上传服务
+	let uploadBlock = '';
+	if (!!config.upload && !!config.upload.url_path && !!config.upload.temp_path && !!config.upload.pass_to) {
+		const tempPath = path.resolve(callingProjectRoot, config.upload.temp_path);
+		if (!fs.existsSync(tempPath)) {
+			fs.mkdirSync(tempPath, { recursive: true });
+		}
+		const maxBodySize = config.upload.max_body_size || '100m';
+
+		uploadBlock = `
+    location ${config.upload.url_path} {
+      client_body_in_file_only on;
+      client_body_temp_path ${tempPath.replace(/\\/g, '/')};
+      client_max_body_size ${maxBodySize};
+
+      proxy_pass ${config.upload.pass_to};
+
+      proxy_set_header Content-Disposition $http_content_disposition;
+      proxy_set_header X-Content-Type $http_content_type;
+      proxy_set_header X-File-Path $request_body_file;
+
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+
+      proxy_set_body off;
+      proxy_redirect off;
+    }`;
+	}
+
 	blocks.sort((ba, bb) => ba[0] - bb[0]);
 	blocks = blocks.map(block => block[1]).join('');
 
-	return `
-worker_processes  1;
+	return `worker_processes  1;
 error_log  "${path.join(logDir, 'error.log').replace(/\\/g, '/')}" warn;
 pid        "${path.join(logDir, 'nginx.pid').replace(/\\/g, '/')}";
 events { worker_connections  ${config.worker_connections}; }
@@ -174,7 +204,7 @@ http {
   
   server {
     listen       ${config.http_port};
-    server_name  ${config.server_name};${blocks}
+    server_name  ${config.server_name};${blocks}${uploadBlock}
   }
 }`;
 }
@@ -189,6 +219,7 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 			{ url_path: "/static", root_path: "./public" }
 		],
 		spa_serving: [],
+		upload: {},
 		reverse_proxy: { enabled: true, url_path: "/", pass_to: "http://localhost:3000" }
 	};
 

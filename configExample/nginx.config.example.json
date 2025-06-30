@@ -18,6 +18,11 @@
       "comment": "You can have multiple static directories.",
       "url_path": "/assets",
       "root_path": "./assets"
+    },
+    {
+      "comment": "This makes the uploaded files accessible via a URL.",
+      "url_path": "/uploads",
+      "root_path": "./your_server/uploads"
     }
   ],
   "spa_serving": [
@@ -27,10 +32,19 @@
       "root_path": "./client/my-vue-app/dist"
     }
   ],
-  "reverse_proxy": {
-    "comment": "Proxy requests to your backend application.",
-    "enabled": true,
-    "url_path": "/",
-    "pass_to": "http://localhost:3000"
+  "reverse_proxy": [
+    {
+      "comment": "Proxy requests to your backend application.",
+      "enabled": true,
+      "url_path": "/",
+      "pass_to": "http://localhost:3000"
+    }
+  ],
+  "upload": {
+    "comment": "This block handles file uploads, saving them to a temp directory and passing the path to a backend handler.",
+    "url_path": "/upload",
+    "temp_path": "./temp_uploads",
+    "pass_to": "http://localhost:3000/upload-callback",
+    "max_body_size": "100m"
   }
 }

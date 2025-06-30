@@ -12,10 +12,13 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "bugs": {
     "url": "https://github.com/LostAbaddon/SynegoBase/issues"
   },
-  "homepage": "https://github.com/LostAbaddon/SynegoBase#readme"
+  "homepage": "https://github.com/LostAbaddon/SynegoBase#readme",
+  "dependencies": {
+    "busboy": "^1.6.0"
+  }
 }
