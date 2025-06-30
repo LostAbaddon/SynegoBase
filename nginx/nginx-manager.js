@@ -1,6 +1,9 @@
 const { execSync } = require('child_process');
 const os = require('os');
 const fs = require('fs');
+const fsp = require('fs').promises;
+
+
 const path = require('path');
 const readline = require('readline');
 const platform = os.platform();
@@ -36,6 +39,16 @@ const DefaultConfig = {
 function runCommand(command, options = { stdio: 'pipe' }) {
 	const output = execSync(command, options);
 	return output ? output.toString().trim() : null;
+}
+
+// Helper function
+async function fileExists(filePath) {
+    try {
+        await fsp.access(filePath);
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 // --- Nginx Installation ---
@@ -108,15 +121,15 @@ function getBrewPrefix() {
 	return null;
 }
 
-function getNginxConfigPath() {
+async function getNginxConfigPath() {
 	let confPath = null;
 	switch (platform) {
 		case 'darwin':
 			confPath = path.join(getBrewPrefix(), 'etc', 'nginx', 'nginx.conf');
 			break;
 		case 'linux':
-			if (fs.existsSync('/etc/nginx/nginx.conf')) confPath = '/etc/nginx/nginx.conf';
-			else if (fs.existsSync('/usr/local/nginx/conf/nginx.conf')) confPath = '/usr/local/nginx/conf/nginx.conf';
+			if (await fileExists('/etc/nginx/nginx.conf')) confPath = '/etc/nginx/nginx.conf';
+			else if (await fileExists('/usr/local/nginx/conf/nginx.conf')) confPath = '/usr/local/nginx/conf/nginx.conf';
 			else return null;
 			break;
 		case 'win32':
@@ -135,15 +148,15 @@ function getNginxConfigPath() {
 	}
 	if (!confPath) return null;
 
-	if (!fs.existsSync(confPath)) confPath = null;
+	if (!(await fileExists(confPath))) confPath = null;
 
 	return confPath;
 }
 
-function generateNginxConfig(config, callingProjectRoot) {
+async function generateNginxConfig(config, callingProjectRoot) {
 	const logDir = path.resolve(callingProjectRoot, config.logs.dir);
-	if (!fs.existsSync(logDir)) {
-		fs.mkdirSync(logDir, { recursive: true });
+	if (!(await fileExists(logDir))) {
+		await fsp.mkdir(logDir, { recursive: true });
 	}
 
 	let locationBlocks = [], grpcBlocks = [], streamBlocks = [];
@@ -184,8 +197,8 @@ function generateNginxConfig(config, callingProjectRoot) {
 	// 文件上传服务
 	if (config.upload && config.upload.url_path && config.upload.temp_path && config.upload.pass_to) {
 		const tempPath = path.resolve(callingProjectRoot, config.upload.temp_path);
-		if (!fs.existsSync(tempPath)) {
-			fs.mkdirSync(tempPath, { recursive: true });
+		if (!(await fileExists(tempPath))) {
+			await fsp.mkdir(tempPath, { recursive: true });
 		}
 		const maxBodySize = config.upload.max_body_size || '100m';
 
@@ -300,7 +313,7 @@ function generateNginxConfig(config, callingProjectRoot) {
 
 	const cert_path = https_config.ssl_certificate ? path.resolve(callingProjectRoot, https_config.ssl_certificate) : null;
 	const key_path = https_config.ssl_certificate_key ? path.resolve(callingProjectRoot, https_config.ssl_certificate_key) : null;
-	const https_enabled = (https_config.enabled !== false) && cert_path && key_path && fs.existsSync(cert_path) && fs.existsSync(key_path);
+	const https_enabled = (https_config.enabled !== false) && cert_path && key_path && await fileExists(cert_path) && await fileExists(key_path);
 	https_config.port = https_config.port || DefaultConfig.https.port;
 
 	if (https_config.force_https_redirect !== false) https_config.force_https_redirect = true;
@@ -393,7 +406,7 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 	if (isString(userConfig)) {
 		userConfig = path.join(process.cwd(), userConfig);
 		try {
-			const data = fs.readFileSync(userConfig);
+			const data = await fsp.readFile(userConfig);
 			userConfig = JSON.parse(data);
 		}
 		catch (err) {
@@ -411,9 +424,8 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 	}
 	logger.log('Proceeding with Nginx configuration...');
 
-	const configPath = getNginxConfigPath() || userConfig.nginxConfPath;
-	console.log('----------------->', configPath);
-	if (!configPath || !fs.existsSync(path.dirname(configPath))) {
+	const configPath = (await getNginxConfigPath()) || userConfig.nginxConfPath;
+	if (!configPath || !(await fileExists(path.dirname(configPath)))) {
 		logger.error('Could not determine Nginx config path or directory does not exist.');
 		return false;
 	}
@@ -422,14 +434,14 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 	logger.log(`Nginx config path found: ${configPath}`);
 	let configWritten = false;
 	try {
-		if (fs.existsSync(configPath)) {
-			fs.copyFileSync(configPath, backupPath);
+		if (await fileExists(configPath)) {
+			await fsp.copyFile(configPath, backupPath);
 			logger.log(`Backed up existing config to ${backupPath}`);
 		}
-		const newConfigContent = generateNginxConfig(finalConfig, callingProjectRoot);
+		const newConfigContent = await generateNginxConfig(finalConfig, callingProjectRoot);
 		logger.info("New Nginx Configuration Generated:");
 		console.info(newConfigContent);
-		fs.writeFileSync(configPath, newConfigContent);
+		await fsp.writeFile(configPath, newConfigContent);
 		logger.log('Successfully wrote new nginx.conf.');
 		configWritten = true;
 	}
@@ -439,13 +451,13 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 	}
 
 	if (configWritten) {
-		copyControlScripts(callingProjectRoot);
+		await copyControlScripts(callingProjectRoot);
 	}
 
 	return true;
 }
 
-function copyControlScripts(callingProjectRoot) {
+async function copyControlScripts(callingProjectRoot) {
 	logger.log('Copying and configuring control scripts to your project root...');
 	const sourceDir = path.resolve(__dirname); // The 'nginx' directory
 	const targetDir = callingProjectRoot;
@@ -456,29 +468,29 @@ function copyControlScripts(callingProjectRoot) {
 	// For the require() statement, we need to escape backslashes on Windows
 	const requirePath = synegoBasePath.replace(/\\/g, '\\\\');
 
-	scripts.forEach(scriptName => {
+	await Promise.all(scripts.map(async scriptName => {
 		const sourceFile = path.join(sourceDir, scriptName);
 		const targetFile = path.join(targetDir, scriptName);
 
-		if (fs.existsSync(sourceFile)) {
+		if (await fileExists(sourceFile)) {
 			try {
 				// Read the template content
-				const templateContent = fs.readFileSync(sourceFile, 'utf-8');
+				const templateContent = await fsp.readFile(sourceFile, 'utf-8');
 				// Replace the placeholder with the actual, escaped path
 				const finalContent = templateContent.replace('__SYNEGOBASE_PATH__', requirePath);
 				// Write the new content to the target file
-				fs.writeFileSync(targetFile, finalContent);
+				await fsp.writeFile(targetFile, finalContent);
 
 				logger.log(`- Created ${scriptName}`);
 				if (scriptName.endsWith('.sh')) {
-					fs.chmodSync(targetFile, '755');
+					await fsp.chmod(targetFile, '755');
 				}
 			}
 			catch (error) {
 				logger.error(`Failed to create ${scriptName}:`, error.message);
 			}
 		}
-	});
+	}));
 	logger.log('Control scripts are ready in your project root.');
 }
 
