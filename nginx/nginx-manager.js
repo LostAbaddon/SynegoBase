@@ -1,14 +1,12 @@
 const { execSync } = require('child_process');
 const os = require('os');
-const fs = require('fs');
 const fsp = require('fs').promises;
-
-
 const path = require('path');
 const readline = require('readline');
 const platform = os.platform();
 
 require('../common/common'); // 常用函数与工具集
+require('../common/fsp');    // 文件相关工具
 require('../common/logger'); // 富文本 console 工具
 const logger = new Logger('Nginx');
 
@@ -39,16 +37,6 @@ const DefaultConfig = {
 function runCommand(command, options = { stdio: 'pipe' }) {
 	const output = execSync(command, options);
 	return output ? output.toString().trim() : null;
-}
-
-// Helper function
-async function fileExists(filePath) {
-    try {
-        await fsp.access(filePath);
-        return true;
-    } catch {
-        return false;
-    }
 }
 
 // --- Nginx Installation ---

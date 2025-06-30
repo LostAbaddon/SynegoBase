@@ -73,7 +73,6 @@ const server = http.createServer((req, res) => {
 		// We pipe the *actual* temporary file stream from Nginx into Busboy
 		const tempFileStream = fs.createReadStream(tempFilePath);
 		tempFileStream.pipe(bb);
-
 	}
 	else {
 		res.writeHead(404, { 'Content-Type': 'text/plain' });
