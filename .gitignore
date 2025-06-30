@@ -141,3 +141,5 @@ vite.config.ts.timestamp-*
 .DS_Store
 
 /test
+*/test
+*/uploads
