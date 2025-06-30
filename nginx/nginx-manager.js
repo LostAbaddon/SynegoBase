@@ -34,26 +34,27 @@ const DefaultConfig = {
 
 // Helper to run shell commands
 function runCommand(command, options = { stdio: 'pipe' }) {
-	try {
-		const output = execSync(command, options);
-		return output ? output.toString().trim() : null;
-	}
-	catch (error) {
-		return null;
-	}
+	const output = execSync(command, options);
+	return output ? output.toString().trim() : null;
 }
 
 // --- Nginx Installation ---
 function checkNginxInstalled() {
 	const command = platform === 'win32' ? 'where nginx' : 'which nginx';
-	return runCommand(command) !== null;
+	try {
+		return runCommand(command) !== null;
+	}
+	catch (err) {
+		return false;
+	}
 }
 
 function installNginx() {
 	// (Implementation remains the same as before)
 	return new Promise((resolve) => {
 		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-		rl.question('Nginx is not installed. Would you like to try and install it automatically? (y/n) ', (answer) => {
+		logger.log('Nginx is not installed. Would you like to try and install it automatically? (y/n)');
+		rl.question('                                                                                     ', (answer) => {
 			rl.close();
 			if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
 				logger.log('Skipping installation. Please install Nginx manually.');
@@ -61,24 +62,24 @@ function installNginx() {
 			}
 			// ... installation logic for each OS ...
 			logger.log('Attempting to install Nginx...');
-			let installCommand;
-			switch (platform) {
-				case 'darwin':
-					installCommand = 'brew install nginx';
-					break;
-				case 'linux':
-					if (runCommand('which apt')) installCommand = 'sudo apt update && sudo apt install -y nginx';
-					else if (runCommand('which yum')) installCommand = 'sudo yum install -y nginx';
-					else { logger.error('Could not find apt or yum.'); return resolve(false); }
-					break;
-				case 'win32':
-					installCommand = 'choco install nginx -y';
-					break;
-				default:
-					logger.error(`Unsupported OS: ${platform}.`);
-					return resolve(false);
-			}
 			try {
+				let installCommand;
+				switch (platform) {
+					case 'darwin':
+						installCommand = 'brew install nginx';
+						break;
+					case 'linux':
+						if (runCommand('which apt')) installCommand = 'sudo apt update && sudo apt install -y nginx';
+						else if (runCommand('which yum')) installCommand = 'sudo yum install -y nginx';
+						else { logger.error('Could not find apt or yum.'); return resolve(false); }
+						break;
+					case 'win32':
+						installCommand = 'choco install nginx -y';
+						break;
+					default:
+						logger.error(`Unsupported OS: ${platform}.`);
+						return resolve(false);
+				}
 				runCommand(installCommand, { stdio: 'inherit' });
 				logger.log('Nginx installed successfully.');
 				resolve(true);
@@ -94,28 +95,49 @@ function installNginx() {
 // --- Nginx Configuration ---
 function getBrewPrefix() {
 	if (platform === 'darwin') {
-		const brewPath = runCommand('which brew');
-		if (brewPath && brewPath.startsWith('/opt/homebrew')) return '/opt/homebrew';
-		return '/usr/local';
+		try {
+			const brewPath = runCommand('which brew');
+			if (brewPath && brewPath.startsWith('/opt/homebrew')) return '/opt/homebrew';
+			return '/usr/local';
+		}
+		catch (err) {
+			logger.error('Get Brew Prefix Failed:', err);
+			return null;
+		}
 	}
 	return null;
 }
 
 function getNginxConfigPath() {
-	// (Implementation remains the same)
+	let confPath = null;
 	switch (platform) {
 		case 'darwin':
-			return path.join(getBrewPrefix(), 'etc', 'nginx', 'nginx.conf');
+			confPath = path.join(getBrewPrefix(), 'etc', 'nginx', 'nginx.conf');
+			break;
 		case 'linux':
-			if (fs.existsSync('/etc/nginx/nginx.conf')) return '/etc/nginx/nginx.conf';
-			if (fs.existsSync('/usr/local/nginx/conf/nginx.conf')) return '/usr/local/nginx/conf/nginx.conf';
-			return null;
+			if (fs.existsSync('/etc/nginx/nginx.conf')) confPath = '/etc/nginx/nginx.conf';
+			else if (fs.existsSync('/usr/local/nginx/conf/nginx.conf')) confPath = '/usr/local/nginx/conf/nginx.conf';
+			else return null;
+			break;
 		case 'win32':
-			const nginxPath = runCommand('where nginx');
-			return nginxPath ? path.join(path.dirname(nginxPath), '..', 'conf', 'nginx.conf') : null;
+			try {
+				const nginxPath = runCommand('where nginx');
+				if (!nginxPath) return null;
+				confPath = path.join(path.dirname(nginxPath), '.', 'conf', 'nginx.conf');
+				break;
+			}
+			catch (err) {
+				logger.error('Get Nginx Config Path Failed:', err);
+				return null;
+			}
 		default:
 			return null;
 	}
+	if (!confPath) return null;
+
+	if (!fs.existsSync(confPath)) confPath = null;
+
+	return confPath;
 }
 
 function generateNginxConfig(config, callingProjectRoot) {
@@ -384,15 +406,16 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 
 	if (!checkNginxInstalled()) {
 		const installed = await installNginx();
-		if (!installed) return; // Stop if user cancels or installation fails
+		if (!installed) return false; // Stop if user cancels or installation fails
 		await wait(2000); // Wait for service
 	}
 	logger.log('Proceeding with Nginx configuration...');
 
-	const configPath = getNginxConfigPath();
+	const configPath = getNginxConfigPath() || userConfig.nginxConfPath;
+	console.log('----------------->', configPath);
 	if (!configPath || !fs.existsSync(path.dirname(configPath))) {
 		logger.error('Could not determine Nginx config path or directory does not exist.');
-		return;
+		return false;
 	}
 
 	const backupPath = `${configPath}.bak.${Date.now()}`;
@@ -418,6 +441,8 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 	if (configWritten) {
 		copyControlScripts(callingProjectRoot);
 	}
+
+	return true;
 }
 
 function copyControlScripts(callingProjectRoot) {
@@ -462,29 +487,30 @@ function controlNginx(action) {
 		logger.error('Nginx is not installed. Please run setup first.');
 		return;
 	}
-	let command;
-	switch (platform) {
-		case 'darwin':
-			command = `${getBrewPrefix()}/bin/brew services ${action} nginx`;
-			break;
-		case 'linux':
-			command = `sudo systemctl ${action} nginx`;
-			break;
-		case 'win32':
-			const nginxPath = path.dirname(runCommand('where nginx'));
-			const actionMap = { start: 'start nginx', stop: 'nginx -s stop', restart: 'nginx -s reload' };
-			command = `cd ${nginxPath} && ${actionMap[action]}`;
-			break;
-		default:
-			logger.error(`Unsupported platform: ${platform}`);
-			return;
-	}
 
-	logger.log(`Executing: ${command}`);
-
-	// We need to capture stderr to analyze it, so we can't use 'inherit' directly
-	let stderr = '';
 	try {
+		let command;
+		switch (platform) {
+			case 'darwin':
+				command = `${getBrewPrefix()}/bin/brew services ${action} nginx`;
+				break;
+			case 'linux':
+				command = `sudo systemctl ${action} nginx`;
+				break;
+			case 'win32':
+				const nginxPath = path.dirname(runCommand('where nginx'));
+				const actionMap = { start: 'start nginx', stop: 'nginx -s stop', restart: 'nginx -s reload' };
+				command = `cd ${nginxPath} && ${actionMap[action]}`;
+				console.log(command);
+				break;
+			default:
+				logger.error(`Unsupported platform: ${platform}`);
+				return;
+		}
+		logger.log(`Executing: ${command}`);
+
+		// We need to capture stderr to analyze it, so we can't use 'inherit' directly
+		let stderr = '';
 		execSync(command, {
 			stdio: ['pipe', 'pipe', 'pipe'] // stdin, stdout, stderr
 		});

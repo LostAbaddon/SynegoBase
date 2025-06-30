@@ -1,5 +1,6 @@
 {
   "comment": "This is an example configuration for SynegoBase Nginx setup.",
+  "nginxConfPath": "Path to Nginx Configuration File Path",
   "server_name": "localhost",
   "http": {
     "comment": "Enable HTTP.",
