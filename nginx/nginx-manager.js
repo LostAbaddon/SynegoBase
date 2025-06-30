@@ -501,7 +501,6 @@ function controlNginx(action) {
 				const nginxPath = path.dirname(runCommand('where nginx'));
 				const actionMap = { start: 'start nginx', stop: 'nginx -s stop', restart: 'nginx -s reload' };
 				command = `cd ${nginxPath} && ${actionMap[action]}`;
-				console.log(command);
 				break;
 			default:
 				logger.error(`Unsupported platform: ${platform}`);
