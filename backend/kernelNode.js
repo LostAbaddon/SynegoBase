@@ -373,7 +373,7 @@ const setupWebSocketServer = (server) => {
 					ip: ip,
 					method: msg.method || 'GET',
 					url: msg.event,
-					body: message.toString(),
+					body: msg.data,
 					params: {},
 					query: {},
 					rawUrl: msg.event,
@@ -388,7 +388,7 @@ const setupWebSocketServer = (server) => {
 				};
 			}
 			if (rid) reply.rid = rid;
-			ws.send(reply);
+			ws.send(JSON.stringify(reply));
 		});
 		logger.log(`WebSocket client connected from ${ip}`);
 	});
@@ -558,25 +558,34 @@ const start = async (configPath) => {
 			const logger = new Logger('Kernel:Common');
 			const protocol = req.headers['x-forwarded-proto'] || req.protocol;
 			const ip = req.headers['x-forwarded-for'] || req.ip;
-			const requestData = {
-				protocol: protocol,
-				method: req.method,
-				url: req.path,
-				params: req.params,
-				query: req.query,
-				body: req.body,
-				ip: ip,
-				rawUrl: `${protocol}://${req.get('host')}${req.originalUrl}`
-			};
+			const msg = convertParma(req.body);
+			if (!isObject(msg) || !msg.event) {
+				if (!res.headersSent) res.status(400).send({
+					code: 400,
+					error: "Invalid request"
+				});
+				return;
+			}
 			try {
-				const reply = await requestHandler(requestData);
+				const rid = msg.rid;
+				const reply = await requestHandler({
+					protocol: protocol,
+					method: req.method,
+					url: req.path,
+					params: req.params,
+					query: req.query,
+					body: msg.data,
+					ip: ip,
+					rawUrl: `${protocol}://${req.get('host')}${req.originalUrl}`
+				});
+				if (rid) reply.rid = rid;
 				if (!res.headersSent) res.status(200).send(reply);
 			}
 			catch (err) {
 				logger.error(`Request Handler Error: ${err.message}`);
 				if (!res.headersSent) res.status(500).send({
 					code: 500,
-					error: "Something wrong occurs..."
+					error: "service down",
 				});
 			}
 		});

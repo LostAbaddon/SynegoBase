@@ -17,7 +17,7 @@ const DefaultConfig = {
 	master: {
 		host: "127.0.0.1",
 		ws: 3000,
-		ipc: os.platform() === 'win32' ? '\\\\.\\pipe\\synego_register_ipc' : '/tmp/synego_register.sock'
+		ipc: os.platform() === 'win32' ? '\\\\.\\pipe\\synego_communicate_ipc' : '/tmp/synego_communicate.sock'
 	}
 };
 // --- 配置加载 ---
@@ -52,46 +52,78 @@ const loadConfig = async (configPath) => {
 // Message Center
 const Pendings = {};
 
-// --- 发送接入请求 ---
-const prepareIPC = async (ipcPath) => {
+// --- 准备与后台的连接 ---
+const onChannelMessage = (message) => {
+	const data = convertParma(message.toString());
+	const rid = data.rid;
+	if (!!rid) {
+		delete data.rid;
+		const res = Pendings[rid];
+		delete Pendings[rid];
+		if (!!res) res(data);
+	}
+	else {
+		// call event handler...
+		logger.log(`Received:`, data);
+	}
+};
+const onChannelClosed = () => {
+	logger.log('Connetion with kernel closed.');
+	kernelConnection.send = () => {};
+	kernelConnection.sendAndWait = () => {};
+};
+const onChannelError = (error) => {
+	logger.error('Connection error:', error);
+};
+const prepareIPC = (ipcPath) => new Promise(res => {
 	const net = require('net');
 
 	kernelConnection = net.createConnection(ipcPath, () => {
 		logger.log(`Connected to IPC server at ${ipcPath}`);
-	});
-	kernelConnection.on('data', (data) => {
-		data = convertParma(data.toString());
-		const rid = data.rid;
-		if (!!rid) {
-			delete data.rid;
-			const res = Pendings[rid];
-			delete Pendings[rid];
-			if (!!res) res(data);
-		}
-		else {
-			// call event handler...
-			logger.log(`Received:`, data);
-		}
-	});
-	kernelConnection.on('end', () => {
-		logger.log('Connetion with kernel closed.');
-	});
-	kernelConnection.on('error', (err) => {
-		logger.error('Connection error:', err);
-	});
 
-	kernelConnection.send = (event, data) => {
-		const msg = { event, data };
-		kernelConnection.write(JSON.stringify(msg) + '\n');
-	};
-	kernelConnection.sendAndWait = (event, data) => new Promise(res => {
-		const rid = newID(16);
-		Pendings[rid] = res;
-		const msg = { event, rid, data };
-		kernelConnection.write(JSON.stringify(msg) + '\n');
+		kernelConnection.send = (event, data) => {
+			const msg = { event, data };
+			kernelConnection.write(JSON.stringify(msg) + '\n');
+		};
+		kernelConnection.sendAndWait = (event, data) => new Promise(res => {
+			const rid = newID(16);
+			Pendings[rid] = res;
+			const msg = { event, rid, data };
+			kernelConnection.write(JSON.stringify(msg) + '\n');
+		});
+
+		res();
 	});
-};
-const prepareWS = async () => {};
+	kernelConnection.on('data', onChannelMessage);
+	kernelConnection.on('end', onChannelClosed);
+	kernelConnection.on('error', onChannelError);
+});
+const prepareWS = (host, port) => new Promise(res => {
+	const WebSocket = require('ws');
+	const address = `ws://${host}:${port}`;
+
+	kernelConnection = new WebSocket(address);
+	kernelConnection._send = kernelConnection.send;
+	kernelConnection.on('open', () => {
+		logger.log(`Connected to WS server at ${address}`);
+
+		kernelConnection.send = (event, data) => {
+			const msg = { event, data };
+			kernelConnection._send(JSON.stringify(msg));
+		};
+		kernelConnection.sendAndWait = (event, data) => new Promise(res => {
+			const rid = newID(16);
+			Pendings[rid] = res;
+			const msg = { event, rid, data };
+			kernelConnection._send(JSON.stringify(msg));
+		});
+
+		res();
+	});
+	kernelConnection.on('message', onChannelMessage);
+	kernelConnection.on('close', onChannelClosed);
+	kernelConnection.on('error', onChannelError);
+});
 
 /**
  * 启动服务响应节点

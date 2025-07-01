@@ -208,9 +208,12 @@
 
 		const sendWsMessage = () => {
 			if (ws && ws.readyState === WebSocket.OPEN && wsMessageInput.value) {
-				const message = wsMessageInput.value;
-				logWs(`Sent: ${message}`, 'sent');
-				ws.send(message);
+				const message = {
+					event: "/test",
+					data: wsMessageInput.value
+				};
+				logWs("Sent:,", message, "sent");
+				ws.send(JSON.stringify(message));
 				wsMessageInput.value = '';
 			}
 		};
