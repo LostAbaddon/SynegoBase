@@ -232,3 +232,15 @@ globalThis.timeDifference = (timeA, timeB) => {
 	ds = Math.floor((timeB - timeA) / 1000);
 	return ds + ' seconds ago';
 };
+
+/* For communication */
+globalThis.convertParma = str => {
+	if (!isString(str)) return str;
+	try {
+		let s = JSON.parse(str);
+		return s;
+	}
+	catch {
+		return str;
+	}
+};

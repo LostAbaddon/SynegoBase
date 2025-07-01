@@ -1,9 +1,9 @@
 require('../common/logger');
-const logger = new Logger('Starter');
+const logger = new Logger('LoadBalance');
 
 const SynegoBase = require('../');
 
-SynegoBase.setupNginx("./config1.json")
+SynegoBase.setupNginx("./config4LB.json")
 .then(() => {
 	logger.log('Nginx DONE');
 })

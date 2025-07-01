@@ -1,5 +1,6 @@
 const nginxManager = require('./nginx/nginx-manager');
 const kernel = require('./backend/kernelNode');
+const worker = require('./backend/workerNode');
 
 /**
  * The main public API for the SynegoBase library.
@@ -35,4 +36,13 @@ module.exports = {
 	 *   If not provided, default settings will be used. See `configExample/kernel.config.example.json`.
 	 */
 	startKernel: kernel.start,
+
+	/**
+	 * Starts the worker node.
+	 * This node actually handles the events and requests.
+	 *
+	 * @param {string} [configPath] - The absolute path to a JSON configuration file for the worker.
+	 *   If not provided, default settings will be used. See `configExample/worker.config.example.json`.
+	 */
+	startWorker: worker.start,
 };

@@ -5,10 +5,14 @@ const logger = new Logger('Test:UDP');
 const client = dgram.createSocket('udp4');
 const port = 3003;
 const host = '127.0.0.1';
-const message = Buffer.from('Hello UDP Server!');
+const message = Buffer.from(JSON.stringify({
+	event: "/test",
+	data: "Test UDP"
+}));
 
 client.on('message', (msg, rinfo) => {
-	logger.log(`Received: "${msg.toString()}" from ${rinfo.address}:${rinfo.port}`);
+	const reply = JSON.parse(msg.toString());
+	logger.log("Received:", reply, `from ${rinfo.address}:${rinfo.port}`);
 	client.close();
 });
 

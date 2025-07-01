@@ -7,13 +7,17 @@ const ipcPath = os.platform() === 'win32' ? '\\\\.\\pipe\\synego_kernel_ipc' : '
 
 const client = net.createConnection(ipcPath, () => {
 	logger.log(`Connected to IPC server at ${ipcPath}`);
-	const message = 'Hello IPC Server!';
-	logger.log(`Sending: "${message}"`);
-	client.write(message + '\n');
+	const message = {
+		event: "/test",
+		data: "Test IPC"
+	};
+	logger.log("Sending: ", message);
+	client.write(JSON.stringify(message) + '\n');
 });
 
 client.on('data', (data) => {
-	logger.log(`Received: "${data.toString().trim()}"`);
+	const reply = JSON.parse(data.toString().trim());
+	logger.log(`Received:`, reply);
 	client.end();
 });
 

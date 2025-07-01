@@ -19,13 +19,16 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 const serviceProto = grpc.loadPackageDefinition(packageDefinition).main;
 const client = new serviceProto.MyService(`${host}:${port}`, grpc.credentials.createInsecure());
 
-const message = 'Hello gRPC Server!';
-logger.log(`Sending: "${message}"`);
-
-client.MyMethod({ data: message }, (err, response) => {
+const message = {
+	event: "/test",
+	data: "Test gRPC"
+};
+logger.log("Sending: ", message);
+client.MyMethod({ data: JSON.stringify(message) }, (err, response) => {
 	if (err) {
 		logger.error('gRPC error:', err);
 		return;
 	}
-	logger.log(`Received: "${response.reply}"`);
+	const reply = JSON.parse(response.reply);
+	logger.log(`Received:`, reply);
 });

@@ -1,0 +1,8 @@
+{
+	"master": {
+		"host": "127.0.0.1",
+		"ws": 3000,
+		"ipc": "/tmp/synego_register.sock",
+		"ipc4win": "\\\\.\\pipe\\synego_register_ipc"
+	}
+}

@@ -1,0 +1,7 @@
+{
+	"master": {
+		"host": "127.0.0.1",
+		"ws": 3000,
+		"ipc": "/tmp/synego_communicate.sock"
+	}
+}

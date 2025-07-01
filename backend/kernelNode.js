@@ -5,9 +5,11 @@ const path = require('path');
 const { Transform } = require('stream');
 
 require('../common/common'); // 常用函数与工具集
-require('../common/fsp');    // 文件相关工具
+require('../common/fsp');	// 文件相关工具
 require('../common/logger'); // 富文本 console 工具
 const logger = new Logger('Kernel');
+const { generateNodeId } = require('../common/identity');
+const EgoNodeId = generateNodeId();
 
 // ---- 辅助类 ---
 class ProtocolParser extends Transform {
@@ -93,6 +95,10 @@ const DefaultConfig = {
 		"enabled": true,
 		"urlpath": "/upload-callback",
 		"filepath": "./uploads"
+	},
+	"shakehand": {
+		"ws": 3000,
+		"ipc": "/tmp/synego_communicate.sock"
 	}
 };
 // --- 配置加载 ---
@@ -134,17 +140,34 @@ const setupTCPServer = (port) => new Promise(res => {
 		socket.pipe(parser);
 
 		parser.on('data', async (message) => {
-			const reply = await requestHandler({
-				protocol: 'tcp',
-				body: message.toString(),
-				ip: parser.realIp + ":" + parser.realPort,
-			});
-			if (Buffer.isBuffer(reply)) {
-				socket.write(Buffer.concat([reply, Buffer.from('\n')]));
+			const msg = convertParma(message.toString().trim());
+			if (!isObject(msg) || !msg.event) {
+				return;
 			}
-			else {
-				socket.write(reply + '\n');
+			const rid = msg.rid;
+			let reply;
+			try {
+				reply = await requestHandler({
+					protocol: 'tcp',
+					ip: parser.realIp + ":" + parser.realPort,
+					method: msg.method || 'GET',
+					url: msg.event,
+					body: msg.data,
+					params: {},
+					query: {},
+					rawUrl: msg.event,
+					sender: socket,
+				});
 			}
+			catch (err) {
+				logger.error('Service Error: ' + err.message);
+				reply = {
+					code: 500,
+					error: "service down",
+				};
+			}
+			if (rid) reply.rid = rid;
+			socket.write(JSON.stringify(reply) + '\n');
 		});
 
 		socket.on('error', (err) => logger.error('TCP Socket Error: ', err));
@@ -177,12 +200,35 @@ const setupUDPServer = (port) => new Promise(res => {
 		catch (e) {
 			// 解析��败，是直连，忽略错误
 		}
-		const reply = await requestHandler({
-			protocol: 'udp',
-			body: body.toString(),
-			ip: `${realIp}:${realPort}`,
-		});
-		udpServer.send(reply, realPort, realIp);
+
+		msg = convertParma(body.toString().trim());
+		if (!isObject(msg) || !msg.event) {
+			return;
+		}
+		const rid = msg.rid;
+		let reply;
+		try {
+			reply = await requestHandler({
+				protocol: 'udp',
+				ip: `${realIp}:${realPort}`,
+				method: msg.method || 'GET',
+				url: msg.event,
+				body: msg.data,
+				params: {},
+				query: {},
+				rawUrl: msg.event,
+				sender: (data) => udpServer.send(JSON.stringify(data), realPort, realIp),
+			});
+		}
+		catch (err) {
+			logger.error('Service Error: ' + err.message);
+			reply = {
+				code: 500,
+				error: "service down",
+			};
+		}
+		if (rid) reply.rid = rid;
+		udpServer.send(JSON.stringify(reply), realPort, realIp);
 	});
 	udpServer.on('listening', () => {
 		const address = udpServer.address();
@@ -209,13 +255,34 @@ const setupGRPCServer = (port, protoFilePath) => new Promise(async res => {
 			MyMethod: async (call, callback) => {
 				const forwardedFor = call.metadata.get('x-forwarded-for');
 				const ip = forwardedFor.length > 0 ? forwardedFor[0] : call.getPeer();
-				const reply = await requestHandler({
-					protocol: 'grpc',
-					body: call.request.data,
-					url: "grpc://MyService/MyMethod",
-					ip: ip,
-				});
-				callback(null, { reply });
+				const msg = convertParma(call.request.data);
+				if (!isObject(msg) || !msg.event) {
+					return;
+				}
+				const rid = msg.rid;
+				let reply;
+				try {
+					reply = await requestHandler({
+						protocol: 'grpc',
+						ip,
+						method: msg.method || 'GET',
+						url: msg.event,
+						body: msg.data,
+						params: {},
+						query: {},
+						rawUrl: msg.event,
+						sender: data => callback(null, { reply: data })
+					});
+				}
+				catch (err) {
+					logger.error('Service Error: ' + err.message);
+					reply = {
+						code: 500,
+						error: "service down",
+					};
+				}
+				if (rid) reply.rid = rid;
+				callback(null, { reply: JSON.stringify(reply) });
 			}
 		});
 		grpcServer.bindAsync(`0.0.0.0:${port}`, grpc.ServerCredentials.createInsecure(), (err, port) => {
@@ -245,18 +312,35 @@ const setupIPCServer = (ipc_path) => new Promise(async res => {
 	const ipcServer = net.createServer((socket) => {
 		logger.log('CLI client connected via IPC.');
 		socket.on('data', async (data) => {
-            const reply = await requestHandler({
-				protocol: 'cli',
-				body: data.toString().trim(),
-				ip: 'console'
-			});
-            if (Buffer.isBuffer(reply)) {
-                socket.write(Buffer.concat([reply, Buffer.from('\n')]));
-            }
-            else {
-                socket.write(reply + '\n');
-            }
-        });
+			const msg = convertParma(data.toString().trim());
+			if (!isObject(msg) || !msg.event) {
+				return;
+			}
+			const rid = msg.rid;
+			let reply;
+			try {
+				reply = await requestHandler({
+					protocol: 'ipc',
+					ip: 'console',
+					method: msg.method || 'GET',
+					url: msg.event,
+					body: msg.data,
+					params: {},
+					query: {},
+					rawUrl: msg.event,
+					sender: socket,
+				});
+			}
+			catch (err) {
+				logger.error('Service Error: ' + err.message);
+				reply = {
+					code: 500,
+					error: "service down",
+				};
+			}
+			if (rid) reply.rid = rid;
+			socket.write(JSON.stringify(reply) + '\n');
+		});
 		socket.on('end', () => logger.log('CLI client disconnected.'));
 		socket.on('error', (err) => logger.error('IPC Socket Error:', err));
 	});
@@ -277,12 +361,33 @@ const setupWebSocketServer = (server) => {
 	wss.on('connection', (ws, req) => {
 		const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 		ws.on('message', async (message) => {
-			const reply = await requestHandler({
-				protocol: server instanceof https.Server ? 'wss' : 'ws',
-				body: message.toString(),
-				ip: ip,
-				rawUrl: req.url
-			});
+			const msg = convertParma(message.toString().trim());
+			if (!isObject(msg) || !msg.event) {
+				return;
+			}
+			const rid = msg.rid;
+			let reply;
+			try {
+				reply = await requestHandler({
+					protocol: server instanceof https.Server ? 'wss' : 'ws',
+					ip: ip,
+					method: msg.method || 'GET',
+					url: msg.event,
+					body: message.toString(),
+					params: {},
+					query: {},
+					rawUrl: msg.event,
+					sender: ws,
+				});
+			}
+			catch (err) {
+				logger.error('Service Error: ' + err.message);
+				reply = {
+					code: 500,
+					error: "service down",
+				};
+			}
+			if (rid) reply.rid = rid;
 			ws.send(reply);
 		});
 		logger.log(`WebSocket client connected from ${ip}`);
@@ -290,12 +395,62 @@ const setupWebSocketServer = (server) => {
 	logger.log(`WebSocket Server attached to ${server instanceof https.Server ? 'HTTPS' : 'HTTP'} server.`);
 };
 
+// --- 内部功能 ---
+const InnerResponsor = {};
+InnerResponsor['/synego/shakehand'] = (data) => {
+	const nodeID = data.nid;
+	if (!nodeID) {
+		return {
+			success: false,
+			reason: 'No ID'
+		}
+	}
+	return {
+		success: true,
+		nodeID: EgoNodeId
+	}
+};
+InnerResponsor['/test'] = (data) => {
+	console.log(data);
+	return {
+		ok: true,
+		data: ">>> [" + data + ']'
+	};
+};
+
+// --- 注册服务 ---
+const ServiceResponsor = {};
+
 // --- 统一请求处理函数 ---
 const requestHandler = async (requestData) => {
-	logger.log("--- New Request Received ---");
-	logger.log(JSON.stringify(requestData, null, 2));
-	// 核心业务逻辑...
-	return `Request for protocol ${requestData.protocol} processed.`;
+	const {protocol, method, url, params, query, ip, rawUrl} = requestData, sender = requestData.sender;
+	const data = requestData.body;
+	if (!url) {
+		return {
+			code: 403,
+			error: "Empty Request URL",
+		}
+	}
+
+	const handler = InnerResponsor[url] || ServiceResponsor[url];
+	if (!handler) {
+		return {
+			code: 404,
+			error: "No such service",
+		}
+	}
+
+	try {
+		const reply = await handler(data, query, params, protocol, method, ip, sender);
+		return reply;
+	}
+	catch (err) {
+		logger.error('Service Response Failed: ' + err.message);
+		return {
+			code: 500,
+			error: "Something wrong...",
+		}
+	}
 };
 
 /**
@@ -469,7 +624,13 @@ const start = async (configPath) => {
 		initTasks.push(setupIPCServer(config.cli.ipc_path));
 	}
 
+	// --- 集群内部通讯 ---
+	if (config.shakehand?.ipc) {
+		initTasks.push(setupIPCServer(config.shakehand.ipc));
+	}
+
 	await Promise.all(initTasks);
+	logger.log(`Kernel node starting with ID: ${EgoNodeId}`);
 };
 
 module.exports = {

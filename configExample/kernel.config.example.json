@@ -33,5 +33,9 @@
 		"enabled": true,
 		"urlpath": "/upload-callback",
 		"filepath": "./uploads"
+	},
+	"shakehand": {
+		"ws": 3000,
+		"ipc": "/tmp/synego_communicate.sock"
 	}
 }
