@@ -193,18 +193,18 @@ async function generateNginxConfig(config, callingProjectRoot) {
 		let block = `
 		location ${config.upload.url_path} {
 			client_body_in_file_only on;
-			client_body_temp_path ${tempPath.replace(/\\/g, '/')};
-			client_max_body_size ${maxBodySize};
+			client_body_temp_path    ${tempPath.replace(/\\/g, '/')};
+			client_max_body_size     ${maxBodySize};
 
 			proxy_pass ${config.upload.pass_to};
 
 			proxy_set_header Content-Disposition $http_content_disposition;
-			proxy_set_header X-Content-Type $http_content_type;
-			proxy_set_header X-File-Path $request_body_file;
+			proxy_set_header X-Content-Type      $http_content_type;
+			proxy_set_header X-File-Path         $request_body_file;
 
 			proxy_set_header Host $host;
-			proxy_set_header X-Real-IP $remote_addr;
-			proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+			proxy_set_header X-Real-IP         $remote_addr;
+			proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
 			proxy_set_header X-Forwarded-Proto $scheme;
 
 			proxy_set_body off;
@@ -226,6 +226,7 @@ async function generateNginxConfig(config, callingProjectRoot) {
 	server {
 		listen                ${serving.port};
 		proxy_pass            ${serving.pass_to};
+		proxy_protocol        on;
 		proxy_timeout         ${serving.timeout || "10s"};
 		proxy_connect_timeout ${serving.connect_timeout || "5s"};
 	}`;
@@ -238,6 +239,7 @@ async function generateNginxConfig(config, callingProjectRoot) {
 	server {
 		listen          ${serving.port} udp;
 		proxy_pass      ${serving.pass_to};
+		proxy_protocol  on;
 		proxy_responses 1;
 	}`;
 			streamBlocks.push(block);
@@ -262,7 +264,7 @@ async function generateNginxConfig(config, callingProjectRoot) {
 		}`;
 		}
 		// 如果是 gRPC 请求
-		if (serving.type === "grpc") {
+		else if (serving.type === "grpc") {
 			block = `
 		location ${serving.url_path} {
 			grpc_pass         ${serving.pass_to};
@@ -403,7 +405,7 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 		}
 	}
 
-	const finalConfig = deepMerge(DefaultConfig, userConfig);
+	const finalConfig = deepMerge(userConfig, DefaultConfig);
 
 	if (!checkNginxInstalled()) {
 		const installed = await installNginx();

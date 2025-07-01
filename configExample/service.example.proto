@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package main;
+
+// The example service definition.
+service MyService {
+  // Sends a greeting
+  rpc MyMethod (MyRequest) returns (MyReply) {}
+}
+
+// The request message containing the user's name.
+message MyRequest {
+  string data = 1;
+}
+
+// The response message containing the greetings
+message MyReply {
+  string reply = 1;
+}

@@ -140,6 +140,12 @@ vite.config.ts.timestamp-*
 
 .DS_Store
 
-/test
-*/test
 */uploads
+/test/logs
+/test/site
+/test/temp_uploads
+/test/uploads
+/test/*.sh
+/test/*.bat
+/test/*.key
+/test/*.crt

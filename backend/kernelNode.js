@@ -1,331 +1,477 @@
-const http = require('http');
-const https = require('httpsys');
+const os = require('os');
 const fs = require('fs');
-const express = require('express');
-const bodyParser = require('body-parser');
-const WebSocket = require('ws');
-const net = require('net');
-const dgram = require('dgram');
-const readline = require('readline');
-const grpc = require('@grpc/grpc-js');
-const protoLoader = require('@grpc/proto-loader');
+const fsp = require('fs').promises;
 const path = require('path');
-const busboy = require('busboy');
+const { Transform } = require('stream');
 
 require('../common/common'); // 常用函数与工具集
 require('../common/fsp');    // 文件相关工具
 require('../common/logger'); // 富文本 console 工具
 const logger = new Logger('Kernel');
 
-// --- 统一请求处理函数 ---
-
-/**
- * 所有请求的统一处理入口
- * @param {object} requestData - 标准化后的请求数据
- */
-function requestHandler(requestData) {
-	logger.log("--- New Request Received ---");
-	logger.log(JSON.stringify(requestData, null, 2));
-
-	// 在这里编写您的核心业务逻辑
-	// 例如: 根据 requestData.protocol 和 requestData.url 来决定如何响应
-	// 为了演示，我们仅打印收到的数据
-}
-
-// --- 1. HTTP 和 HTTPS 服务器设置 ---
-const app = express();
-app.use(bodyParser.json()); // for parsing application/json
-app.use(bodyParser.urlencoded({ extended: true })); // for parsing application/x-www-form-urlencoded
-
-// Nginx 会处理文件上传，然后通过这个接口通知 Node.js
-// 请求体中应包含如 { "filePath": "/path/on/nginx/server/file.txt" } 的信息
-app.post('/upload-callback', async (req, res) => {
-	if (req.method !== 'POST' && req.method !== 'PUT') {
-		return res.status(403).send({
-			code: 403,
-			message: "Resource Forbidden",
-		});
+// ---- 辅助类 ---
+class ProtocolParser extends Transform {
+	constructor(socket) {
+		super();
+		this.socket = socket;
+		this.realIp = socket.remoteAddress;
+		this.realPort = socket.remotePort;
+		this.headerParsed = false;
+		this._buffer = Buffer.alloc(0);
 	}
 
-	const logger = new Logger('Kernel:Uploader');
-	const tempFilePath = req.headers['x-file-path'];
+	_transform(chunk, encoding, callback) {
+		this._buffer = Buffer.concat([this._buffer, chunk]);
 
-	if (!tempFilePath || !(await fileExists(tempFilePath))) {
-		logger.error('  - Error: Temp file not found at the specified path.');
-		res.writeHead(400, { 'Content-Type': 'application/json' });
-		res.end(JSON.stringify({ message: 'Error: Temp file not found.' }));
-		return;
-	}
-
-	logger.log('File upload callback received:');
-	logger.log(`  - Temp File Path: ${tempFilePath}`);
-
-	const bb = busboy({ headers: req.headers });
-	let originalFilename = 'unknown_file';
-	let permanentPath = '';
-
-	bb.on('file', (fieldname, file, info) => {
-		const { filename, encoding, mimeType } = info;
-		originalFilename = filename;
-		// Sanitize filename to prevent directory traversal attacks
-		const safeFilename = path.basename(originalFilename);
-		// Create a unique filename to avoid overwrites
-		const uniqueFilename = `${Date.now()}-${safeFilename}`;
-		const uploadsDir = path.join(__dirname, 'uploads');
-
-		// Ensure the 'uploads' directory exists
-		fs.mkdirSync(uploadsDir, { recursive: true });
-		permanentPath = path.join(uploadsDir, uniqueFilename);
-
-		logger.log(`  - Parsing file: ${originalFilename}`);
-		logger.log(`  - Saving to: ${permanentPath}`);
-
-		const writeStream = fs.createWriteStream(permanentPath);
-		file.pipe(writeStream);
-	});
-
-	bb.on('close', () => {
-		logger.log('  - Busboy finished parsing.');
-		// The temporary file from Nginx is no longer needed
-		fs.unlink(tempFilePath, (err) => {
-			if (err) logger.error(`  - Error deleting temp file: ${err.message}`);
-			else logger.log(`  - Successfully deleted temp file: ${tempFilePath}`);
-		});
-
-		// Construct a public URL instead of a file system path
-		const publicUrl = path.join('/uploads', path.basename(permanentPath)).replace(/\\/g, '/');
-
-		res.writeHead(200, { 'Content-Type': 'application/json' });
-		res.end(JSON.stringify({
-			success: true,
-			message: "File uploaded successfully.",
-			url: publicUrl,
-		}));
-	});
-	
-	bb.on('error', (err) => {
-		logger.error(`  - Busboy error: ${err.message}`);
-		fs.unlink(tempFilePath, () => {}); // Clean up temp file on error
-		res.writeHead(500, { 'Content-Type': 'application/json' });
-		res.end(JSON.stringify({ code: 500, error: 'Error processing upload.' }));
-	});
-
-	// We pipe the *actual* temporary file stream from Nginx into Busboy
-	const tempFileStream = fs.createReadStream(tempFilePath);
-	tempFileStream.pipe(bb);
-
-
-
-	const requestData = {
-		protocol: req.protocol,
-		method: req.method,
-		url: req.path,
-		params: req.params,
-		query: req.query,
-		body: req.body,
-		ip: req.ip,
-		rawUrl: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
-		file: {
-			path: req.body.filePath || null
+		if (!this.headerParsed) {
+			try {
+				const ProxyProtocol = require('proxy-protocol-js');
+				const header = ProxyProtocol.parse(this._buffer);
+				if (header && header.source) {
+					this.realIp = header.source.ip;
+					this.realPort = header.source.port;
+					this._buffer = this._buffer.slice(header.headerLength);
+					logger.log(`TCP client connected from ${this.realIp}:${this.realPort} (via PROXY)`);
+				}
+			}
+			catch {
+				// Ignore parse errors, wait for more data or assume direct connection
+			}
+			this.headerParsed = true;
+			if (!this.realIp) {
+				 logger.log(`TCP client connected from ${this.socket.remoteAddress}:${this.socket.remotePort} (direct)`);
+				 this.realIp = this.socket.remoteAddress;
+				 this.realPort = this.socket.remotePort;
+			}
 		}
-	};
-	requestHandler(requestData);
-	res.status(200).send('Notification received');
-});
 
-// 通用路由，捕获所有其他 HTTP/HTTPS 请求
-app.all('*', (req, res) => {
-	const requestData = {
-		protocol: req.protocol,
-		method: req.method,
-		url: req.path,
-		params: req.params,
-		query: req.query,
-		body: req.body,
-		ip: req.ip,
-		rawUrl: `${req.protocol}://${req.get('host')}${req.originalUrl}`
-	};
-	requestHandler(requestData);
-	res.status(200).send('Request received');
-});
+		let boundary = this._buffer.indexOf('\n');
+		while (boundary !== -1) {
+			const message = this._buffer.slice(0, boundary);
+			this.push(message);
+			this._buffer = this._buffer.slice(boundary + 1);
+			boundary = this._buffer.indexOf('\n');
+		}
 
-
-// 创建 HTTP 服务器
-const httpServer = http.createServer(app);
-httpServer.listen(3000, () => {
-	console.log('HTTP Server listening on port 3000');
-});
-
-// 创建 HTTPS 服务器 (需要 SSL 证书)
-// 您可以使用 mkcert 或 openssl 生成自签名证书用于开发
-// openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes
-try {
-	const options = {
-		key: fs.readFileSync('key.pem'),
-		cert: fs.readFileSync('cert.pem')
-	};
-	const httpsServer = https.createServer(options, app);
-	httpsServer.listen(3001, () => {
-		console.log('HTTPS Server listening on port 3001');
-	});
-	setupWebSocketServer(httpsServer); // 绑定 WebSocket 到 HTTPS
-} catch (error) {
-	console.log('Could not start HTTPS server. SSL certificate files (key.pem, cert.pem) might be missing.');
+		callback();
+	}
 }
 
+// --- 默认配置 ---
+const DefaultConfig = {
+	"http": {
+		"enabled": true,
+		"port": 3000
+	},
+	"https": {
+		"enabled": false,
+		"port": 3001,
+		"key": "key.pem",
+		"cert": "cert.pem"
+	},
+	"ws": {
+		"enabled": true
+	},
+	"tcp": {
+		"enabled": true,
+		"port": 3002
+	},
+	"udp": {
+		"enabled": true,
+		"port": 3003
+	},
+	"grpc": {
+		"enabled": true,
+		"port": 3004,
+		"proto": "service.proto"
+	},
+	"cli": {
+		"enabled": true,
+		"ipc_path": os.platform() === 'win32' ? '\\\\.\\pipe\\synego_kernel_ipc' : '/tmp/synego_kernel.sock'
+	},
+	"upload": {
+		"enabled": true,
+		"urlpath": "/upload-callback",
+		"filepath": "./uploads"
+	}
+};
+// --- 配置加载 ---
+const loadConfig = async (configPath) => {
+	if (!configPath) {
+		logger.warn('No config file path provided. Using default configuration.');
+		return DefaultConfig;
+	}
+	try {
+		if (await fileExists(configPath)) {
+			logger.log(`Loading configuration from: ${configPath}`);
+			const configData = await fsp.readFile(configPath, 'utf8');
+			try {
+				return deepMerge(JSON.parse(configData), DefaultConfig);
+			}
+			catch (err) {
+				logger.error(`Load Configuration Failed: ${err.message}`);
+				return DefaultConfig;
+			}
+		}
+		else {
+			logger.warn(`Config file not found at ${configPath}. Using default configuration.`);
+			return DefaultConfig;
+		}
+	}
+	catch (error) {
+		logger.error(`Error reading or parsing config file: ${error.message}`);
+		return DefaultConfig;
+	}
+};
 
-// --- 2. WebSocket 服务器设置 ---
-function setupWebSocketServer(server) {
+// --- 各模块初始化 ---
+
+/* TCP Server */
+const setupTCPServer = (port) => new Promise(res => {
+	const net = require('net');
+	const server = net.createServer(socket => {
+		const parser = new ProtocolParser(socket);
+		socket.pipe(parser);
+
+		parser.on('data', async (message) => {
+			const reply = await requestHandler({
+				protocol: 'tcp',
+				body: message.toString(),
+				ip: parser.realIp + ":" + parser.realPort,
+			});
+			if (Buffer.isBuffer(reply)) {
+				socket.write(Buffer.concat([reply, Buffer.from('\n')]));
+			}
+			else {
+				socket.write(reply + '\n');
+			}
+		});
+
+		socket.on('error', (err) => logger.error('TCP Socket Error: ', err));
+		socket.on('end', () => logger.log(`TCP client from ${parser.realIp} disconnected`));
+	});
+
+	server.listen(port, () => {
+		logger.log(`TCP Server listening on port ${port}`);
+		res();
+	});
+});
+/* UDP Server */
+const setupUDPServer = (port) => new Promise(res => {
+	const dgram = require('dgram');
+	const udpServer = dgram.createSocket('udp4');
+	udpServer.on('message', async (msg, rinfo) => {
+		let realIp = rinfo.address;
+		let realPort = rinfo.port;
+		let body = msg;
+
+		try {
+			const ProxyProtocol = require('proxy-protocol-js');
+			const header = ProxyProtocol.parse(msg);
+			if (header && header.source) {
+				realIp = header.source.ip || realIp;
+				realPort = header.source.port || realPort;
+				body = msg.slice(header.headerLength);
+			}
+		}
+		catch (e) {
+			// 解析��败，是直连，忽略错误
+		}
+		const reply = await requestHandler({
+			protocol: 'udp',
+			body: body.toString(),
+			ip: `${realIp}:${realPort}`,
+		});
+		udpServer.send(reply, realPort, realIp);
+	});
+	udpServer.on('listening', () => {
+		const address = udpServer.address();
+		logger.log(`UDP Server listening on ${address.address}:${address.port}`);
+		res();
+	});
+	udpServer.bind(port);
+});
+/* gRPC Server */
+const setupGRPCServer = (port, protoFilePath) => new Promise(async res => {
+	const PROTO_PATH = path.resolve(process.cwd(), protoFilePath);
+	if (!(await fileExists(PROTO_PATH))) {
+		logger.error(`Proto file not found: ${PROTO_PATH}`);
+		return res();
+	}
+
+	try {
+		const grpc = require('@grpc/grpc-js');
+		const protoLoader = require('@grpc/proto-loader');
+		const packageDefinition = protoLoader.loadSync(PROTO_PATH, { keepCase: true, longs: String, enums: String, defaults: true, oneofs: true });
+		const serviceProto = grpc.loadPackageDefinition(packageDefinition).main;
+		const grpcServer = new grpc.Server();
+		grpcServer.addService(serviceProto.MyService.service, {
+			MyMethod: async (call, callback) => {
+				const forwardedFor = call.metadata.get('x-forwarded-for');
+				const ip = forwardedFor.length > 0 ? forwardedFor[0] : call.getPeer();
+				const reply = await requestHandler({
+					protocol: 'grpc',
+					body: call.request.data,
+					url: "grpc://MyService/MyMethod",
+					ip: ip,
+				});
+				callback(null, { reply });
+			}
+		});
+		grpcServer.bindAsync(`0.0.0.0:${port}`, grpc.ServerCredentials.createInsecure(), (err, port) => {
+			if (err) {
+				logger.error('gRPC server error:', err);
+			}
+			else {
+				logger.log(`gRPC Server listening on port ${port}`);
+			}
+			res();
+		});
+	}
+	catch (error) {
+		logger.error(`Could not start gRPC server: ${error.message}`);
+		res();
+	}
+});
+/* IPC Server */
+const setupIPCServer = (ipc_path) => new Promise(async res => {
+	const ipcPath = ipc_path;
+	// Clean up old socket file if it exists
+	if (os.platform() !== 'win32' && (await fileExists(ipcPath))) {
+		await fsp.unlink(ipcPath);
+	}
+
+	const net = require('net');
+	const ipcServer = net.createServer((socket) => {
+		logger.log('CLI client connected via IPC.');
+		socket.on('data', async (data) => {
+            const reply = await requestHandler({
+				protocol: 'cli',
+				body: data.toString().trim(),
+				ip: 'console'
+			});
+            if (Buffer.isBuffer(reply)) {
+                socket.write(Buffer.concat([reply, Buffer.from('\n')]));
+            }
+            else {
+                socket.write(reply + '\n');
+            }
+        });
+		socket.on('end', () => logger.log('CLI client disconnected.'));
+		socket.on('error', (err) => logger.error('IPC Socket Error:', err));
+	});
+	ipcServer.listen(ipcPath, () => {
+		logger.log(`IPC server listening on ${ipcPath}`);
+		res();
+	});
+	process.on('exit', () => {
+		ipcServer.close();
+		if (os.platform() !== 'win32') fs.unlinkSync(ipcPath);
+	});
+});
+/* WebSocket Server */
+const setupWebSocketServer = (server) => {
+	const https = require('https');
+	const WebSocket = require('ws');
 	const wss = new WebSocket.Server({ server });
 	wss.on('connection', (ws, req) => {
-		const ip = req.socket.remoteAddress;
-		ws.on('message', (message) => {
-			const requestData = {
+		const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+		ws.on('message', async (message) => {
+			const reply = await requestHandler({
 				protocol: server instanceof https.Server ? 'wss' : 'ws',
-				method: null,
-				url: req.url,
-				params: {},
-				query: {},
 				body: message.toString(),
 				ip: ip,
 				rawUrl: req.url
-			};
-			requestHandler(requestData);
+			});
+			ws.send(reply);
+		});
+		logger.log(`WebSocket client connected from ${ip}`);
+	});
+	logger.log(`WebSocket Server attached to ${server instanceof https.Server ? 'HTTPS' : 'HTTP'} server.`);
+};
 
-			// 示例：回显收到的消息
-			ws.send(`Echo: ${message}`);
+// --- 统一请求处理函数 ---
+const requestHandler = async (requestData) => {
+	logger.log("--- New Request Received ---");
+	logger.log(JSON.stringify(requestData, null, 2));
+	// 核心业务逻辑...
+	return `Request for protocol ${requestData.protocol} processed.`;
+};
+
+/**
+ * 启动主响应节点
+ * @param {string} [configPath] - 配置文件的可选路径。
+ */
+const start = async (configPath) => {
+	const config = await loadConfig(configPath);
+	const initTasks = [];
+
+	// --- HTTP/HTTPS/WS 服务器 ---
+	if ((config.http?.enabled && config.http?.port) || (config.https?.enabled && config.https?.port) || (config.upload?.enabled && config.upload?.urlpath)) {
+		const express = require('express');
+		const cors = require('cors');
+
+		const app = express();
+		app.use(cors()); // 在所有路由前使用 CORS 中间件
+		app.use(express.json());
+		app.use(express.urlencoded({ extended: true }));
+
+		// 上传回调处理
+		if (config.upload?.enabled && config.upload?.urlpath) {
+			const busboy = require('busboy');
+			const uploadsDir = path.join(process.cwd(), config.upload.filepath || './uploads');
+			await fsp.mkdir(uploadsDir, { recursive: true });
+			logger.log('Upload Folder Ready: ' + uploadsDir);
+
+			app.post(config.upload.urlpath, async (req, res) => {
+				const logger = new Logger('Kernel:Uploader');
+				const tempFilePath = req.headers['x-file-path'];
+				const contentTypeHeader = req.headers['x-content-type']; // Nginx passes original Content-Type here
+
+				let stream;
+				const cfg = {};
+				if (!!contentTypeHeader) cfg.headers = { 'content-type': contentTypeHeader };
+				else cfg.headers = req.headers;
+				const bb = busboy(cfg);
+
+				// Scenario 1: Request is coming from Nginx upload proxy
+				if (tempFilePath) {
+					if (!(await fileExists(tempFilePath))) {
+						logger.error('  - Error: Temp file specified by Nginx not found.');
+						res.status(400).json({ code: 404, error: 'Uploaded temp file not found.' });
+						return;
+					}
+
+					logger.info('New Upload Request (from Nginx): ' + tempFilePath);
+					stream = fs.createReadStream(tempFilePath);
+				}
+				// Scenario 2: Direct browser upload (no Nginx proxy)
+				else {
+					logger.info('New Upload Request (Direct): ' + (tempFilePath || 'Direct browser upload'));
+					stream = req;
+				}
+
+				bb.on('file', (fieldname, file, info) => {
+					const { filename } = info;
+					const safeFilename = path.basename(filename);
+					const uniqueFilename = `${Date.now()}-${safeFilename}`;
+					const permanentPath = path.join(uploadsDir, uniqueFilename);
+					logger.log(`  - Saving to: ${permanentPath}`);
+
+					const writeStream = fs.createWriteStream(permanentPath);
+					file.pipe(writeStream);
+
+					writeStream.on('finish', () => {
+						const publicUrl = path.join('/', config.upload.filepath, uniqueFilename).replace(/\\/g, '/');
+						if (!res.headersSent) {
+							res.json({ success: true, url: publicUrl });
+						}
+					});
+				});
+				bb.on('close', () => {
+					if (!tempFilePath) return;
+
+					stream.close();
+
+					// This event fires after all parts have been processed.
+					// Now it's safe to delete the temporary file.
+					fs.unlink(tempFilePath, (err) => {
+						if (err) logger.error(`  - Error deleting temp file: ${err.message}`);
+						else logger.log(`  - Deleted temp file: ${tempFilePath}`);
+					});
+				});
+				bb.on('error', (err) => {
+					if (tempFilePath) {
+						logger.error(`  - Busboy error while processing temp file: ${err.message}`);
+						stream.destroy(); // Stop reading the file on error
+					}
+					else {
+						logger.error(`  - Busboy error: ${err.message}`);
+					}
+					if (!res.headersSent) {
+						res.status(500).json({ code: 500, error: 'Error processing uploaded file data.' });
+					}
+				});
+
+				stream.pipe(bb);
+			});
+			logger.log('Uploader Ready: ' + config.upload.urlpath);
+		}
+
+		// 通用路由
+		app.use(async (req, res) => {
+			const logger = new Logger('Kernel:Common');
+			const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+			const ip = req.headers['x-forwarded-for'] || req.ip;
+			const requestData = {
+				protocol: protocol,
+				method: req.method,
+				url: req.path,
+				params: req.params,
+				query: req.query,
+				body: req.body,
+				ip: ip,
+				rawUrl: `${protocol}://${req.get('host')}${req.originalUrl}`
+			};
+			try {
+				const reply = await requestHandler(requestData);
+				if (!res.headersSent) res.status(200).send(reply);
+			}
+			catch (err) {
+				logger.error(`Request Handler Error: ${err.message}`);
+				if (!res.headersSent) res.status(500).send({
+					code: 500,
+					error: "Something wrong occurs..."
+				});
+			}
 		});
 
-		console.log(`WebSocket client connected from ${ip}`);
-	});
-	console.log(`WebSocket Server is running and attached to ${server instanceof https.Server ? 'HTTPS' : 'HTTP'} server.`);
-}
-setupWebSocketServer(httpServer); // 绑定 WebSocket 到 HTTP
+		// HTTP 服务器
+		if (config.http?.enabled && config.http?.port) {
+			const http = require('http');
+			const httpServer = http.createServer(app);
+			httpServer.listen(config.http.port, () => logger.log(`HTTP Server listening on port ${config.http.port}`));
+			if (config.ws?.enabled) setupWebSocketServer(httpServer);
+		}
 
-
-// --- 3. TCP 服务器设置 ---
-const tcpServer = net.createServer((socket) => {
-	const ip = socket.remoteAddress;
-	console.log(`TCP client connected from ${ip}`);
-
-	socket.on('data', (data) => {
-		const requestData = {
-			protocol: 'tcp',
-			method: null,
-			url: null,
-			params: {},
-			query: {},
-			body: data.toString(),
-			ip: ip,
-			rawUrl: null
-		};
-		requestHandler(requestData);
-	});
-
-	socket.on('end', () => {
-		console.log(`TCP client from ${ip} disconnected`);
-	});
-
-	socket.on('error', (err) => {
-		console.error('TCP Socket Error: ', err);
-	});
-});
-tcpServer.listen(3002, () => {
-	console.log('TCP Server listening on port 3002');
-});
-
-
-// --- 4. UDP 服务器设置 ---
-const udpServer = dgram.createSocket('udp4');
-udpServer.on('error', (err) => {
-	console.error(`UDP Server Error:\n${err.stack}`);
-	udpServer.close();
-});
-udpServer.on('message', (msg, rinfo) => {
-	const requestData = {
-		protocol: 'udp',
-		method: null,
-		url: null,
-
-		params: {},
-		query: {},
-		body: msg.toString(),
-		ip: `${rinfo.address}:${rinfo.port}`,
-		rawUrl: null
-	};
-	requestHandler(requestData);
-});
-udpServer.on('listening', () => {
-	const address = udpServer.address();
-	console.log(`UDP Server listening on ${address.address}:${address.port}`);
-});
-udpServer.bind(3003);
-
-
-// --- 5. gRPC 服务器设置 ---
-const PROTO_PATH = './service.proto';
-const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
-	keepCase: true,
-	longs: String,
-	enums: String,
-	defaults: true,
-	oneofs: true
-});
-const serviceProto = grpc.loadPackageDefinition(packageDefinition).main;
-
-const grpcServer = new grpc.Server();
-
-grpcServer.addService(serviceProto.MyService.service, {
-	MyMethod: (call, callback) => {
-		const requestData = {
-			protocol: 'grpc',
-			method: 'MyMethod', // gRPC method name
-			url: '/main.MyService/MyMethod', // gRPC URL path
-			params: {},
-			query: {},
-			body: call.request,
-			ip: call.getPeer(),
-			rawUrl: null
-		};
-		requestHandler(requestData);
-		callback(null, { reply: 'gRPC request received for: ' + call.request.data });
+		// HTTPS 服务器
+		if (config.https?.enabled && config.https?.port) {
+			const https = require('https');
+			try {
+				const options = { key: fs.readFileSync(config.https.key), cert: fs.readFileSync(config.https.cert) };
+				const httpsServer = https.createServer(options, app);
+				httpsServer.listen(config.https.port, () => logger.log(`HTTPS Server listening on port ${config.https.port}`));
+				if (config.ws?.enabled) setupWebSocketServer(httpsServer);
+			}
+			catch (error) {
+				logger.error(`Could not start HTTPS server: ${error.message}`);
+			}
+		}
 	}
-});
 
-grpcServer.bindAsync('0.0.0.0:3004', grpc.ServerCredentials.createInsecure(), (err, port) => {
-	if (err) {
-		console.error('gRPC server error:', err);
-		return;
+	// --- TCP 服务器 ---
+	if (config.tcp?.enabled && config.tcp?.port) {
+		initTasks.push(setupTCPServer(config.tcp.port));
 	}
-	grpcServer.start();
-	console.log(`gRPC Server listening on port ${port}`);
-});
 
+	// --- UDP 服务器 ---
+	if (config.udp?.enabled && config.udp?.port) {
+		initTasks.push(setupUDPServer(config.udp.port));
+	}
 
-// --- 6. 命令行接口 (CLI) ---
-const rl = readline.createInterface({
-	input: process.stdin,
-	output: process.stdout,
-	prompt: 'SERVER_CMD> '
-});
+	// --- gRPC 服务器 ---
+	if (config.grpc?.enabled && config.grpc?.port && config.grpc?.proto) {
+		initTasks.push(setupGRPCServer(config.grpc.port, config.grpc.proto));
+	}
 
-rl.on('line', (line) => {
-	const requestData = {
-		protocol: 'cli',
-		method: null,
-		url: null,
-		params: {},
-		query: {},
-		body: line.trim(),
-		ip: 'localhost',
-		rawUrl: null
-	};
-	requestHandler(requestData);
-	rl.prompt();
-}).on('close', () => {
-	console.log('Exiting CLI.');
-	process.exit(0);
-});
+	// --- 命令行接口 (IPC) 服务器 ---
+	if (config.cli?.enabled && config.cli?.ipc_path) {
+		initTasks.push(setupIPCServer(config.cli.ipc_path));
+	}
 
-console.log('Command Line Interface is ready. Type a command and press Enter.');
-rl.prompt();
+	await Promise.all(initTasks);
+};
+
+module.exports = {
+	start,
+};

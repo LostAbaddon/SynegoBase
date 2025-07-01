@@ -10,22 +10,13 @@ globalThis.newID = (len=16) => {
 };
 
 globalThis.deepMerge = (target, source) => {
+	if (target === null || target === undefined) return source;
+	if (!isObject(target) || !isObject(source)) return target;
+
 	const output = { ...target };
-	if (isObject(target) && isObject(source)) {
-		Object.keys(source).forEach(key => {
-			if (isObject(source[key])) {
-				if (!(key in target)) {
-					Object.assign(output, { [key]: source[key] });
-				}
-				else {
-					output[key] = deepMerge(target[key], source[key]);
-				}
-			}
-			else {
-				Object.assign(output, { [key]: source[key] });
-			}
-		});
-	}
+	Object.keys(source).forEach(key => {
+		output[key] = deepMerge(target[key], source[key]);
+	});
 	return output;
 };
 
