@@ -156,7 +156,7 @@ const setupTCPServer = (port) => new Promise(res => {
 					params: {},
 					query: {},
 					rawUrl: msg.event,
-					sender: socket,
+					sender: (data) => socket.write(JSON.stringify(data) + '\n'),
 				});
 			}
 			catch (err) {
@@ -271,7 +271,7 @@ const setupGRPCServer = (port, protoFilePath) => new Promise(async res => {
 						params: {},
 						query: {},
 						rawUrl: msg.event,
-						sender: data => callback(null, { reply: data })
+						sender: data => callback(null, { reply: JSON.stringify(data) })
 					});
 				}
 				catch (err) {
@@ -328,7 +328,7 @@ const setupIPCServer = (ipc_path) => new Promise(async res => {
 					params: {},
 					query: {},
 					rawUrl: msg.event,
-					sender: socket,
+					sender: (data) => socket.write(JSON.stringify(data) + '\n'),
 				});
 			}
 			catch (err) {
@@ -377,7 +377,7 @@ const setupWebSocketServer = (server) => {
 					params: {},
 					query: {},
 					rawUrl: msg.event,
-					sender: ws,
+					sender: (data) => ws.send(JSON.stringify(data)),
 				});
 			}
 			catch (err) {
@@ -390,6 +390,9 @@ const setupWebSocketServer = (server) => {
 			if (rid) reply.rid = rid;
 			ws.send(JSON.stringify(reply));
 		});
+		ws.on('close', () => {
+			logger.log(`WebSocket client disconnected: ${ip}`);
+		});
 		logger.log(`WebSocket client connected from ${ip}`);
 	});
 	logger.log(`WebSocket Server attached to ${server instanceof https.Server ? 'HTTPS' : 'HTTP'} server.`);
@@ -397,7 +400,7 @@ const setupWebSocketServer = (server) => {
 
 // --- 内部功能 ---
 const InnerResponsor = {};
-InnerResponsor['/synego/shakehand'] = (data) => {
+InnerResponsor['/synego/shakehand'] = (data, query, params, protocol, method, ip, sender) => {
 	const nodeID = data.nid;
 	if (!nodeID) {
 		return {
@@ -405,21 +408,19 @@ InnerResponsor['/synego/shakehand'] = (data) => {
 			reason: 'No ID'
 		}
 	}
+
+	console.log(protocol, sender);
 	return {
 		success: true,
 		nodeID: EgoNodeId
 	}
 };
-InnerResponsor['/test'] = (data) => {
-	console.log(data);
-	return {
-		ok: true,
-		data: ">>> [" + data + ']'
-	};
-};
 
 // --- 注册服务 ---
 const ServiceResponsor = {};
+
+// --- 节点集群 ---
+const WorkerGroup = {};
 
 // --- 统一请求处理函数 ---
 const requestHandler = async (requestData) => {
@@ -576,7 +577,8 @@ const start = async (configPath) => {
 					query: req.query,
 					body: msg.data,
 					ip: ip,
-					rawUrl: `${protocol}://${req.get('host')}${req.originalUrl}`
+					rawUrl: `${protocol}://${req.get('host')}${req.originalUrl}`,
+					sender: () => {},
 				});
 				if (rid) reply.rid = rid;
 				if (!res.headersSent) res.status(200).send(reply);
@@ -644,4 +646,13 @@ const start = async (configPath) => {
 
 module.exports = {
 	start,
+};
+
+// TEST
+InnerResponsor['/test'] = (data) => {
+	console.log(data);
+	return {
+		ok: true,
+		data: ">>> [" + data + ']'
+	};
 };
