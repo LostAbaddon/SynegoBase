@@ -1,11 +1,13 @@
 const os = require('os');
+const cluster = require('cluster');
 const net = require('net');
 const fs = require('fs').promises;
 const path = require('path');
 
 require('../common/common');
+require('../common/fsp');
 require('../common/logger');
-const logger = new Logger('Worker');
+const logger = new Logger('Worker' + (cluster.isWorker ? '-' + process.pid : ''));
 const { generateNodeId, getIPAddress } = require('../common/identity');
 const EgoNodeId = generateNodeId();
 
@@ -20,41 +22,13 @@ const DefaultConfig = {
 		ipc: os.platform() === 'win32' ? '\\\\.\\pipe\\synego_communicate_ipc' : '/tmp/synego_communicate.sock'
 	}
 };
-// --- 配置加载 ---
-const loadConfig = async (configPath) => {
-	if (!configPath) {
-		logger.warn('No config file path provided. Using default configuration.');
-		return DefaultConfig;
-	}
-	try {
-		if (await fileExists(configPath)) {
-			logger.log(`Loading configuration from: ${configPath}`);
-			const configData = await fs.readFile(configPath, 'utf8');
-			try {
-				return deepMerge(JSON.parse(configData), DefaultConfig);
-			}
-			catch (err) {
-				logger.error(`Load Configuration Failed: ${err.message}`);
-				return DefaultConfig;
-			}
-		}
-		else {
-			logger.warn(`Config file not found at ${configPath}. Using default configuration.`);
-			return DefaultConfig;
-		}
-	}
-	catch (error) {
-		logger.error(`Error reading or parsing config file: ${error.message}`);
-		return DefaultConfig;
-	}
-};
 
 // Message Center
 const Pendings = {};
 
 // --- 准备与后台的连接 ---
 const onChannelMessage = (message) => {
-	const data = convertParma(message.toString());
+	const data = isObject(message) ? message : convertParma(message.toString());
 	const rid = data.rid;
 	if (!!rid) {
 		delete data.rid;
@@ -75,29 +49,6 @@ const onChannelClosed = () => {
 const onChannelError = (error) => {
 	logger.error('Connection error:', error);
 };
-const prepareIPC = (ipcPath) => new Promise(res => {
-	const net = require('net');
-
-	kernelConnection = net.createConnection(ipcPath, () => {
-		logger.log(`Connected to IPC server at ${ipcPath}`);
-
-		kernelConnection.send = (event, data) => {
-			const msg = { event, data };
-			kernelConnection.write(JSON.stringify(msg) + '\n');
-		};
-		kernelConnection.sendAndWait = (event, data) => new Promise(res => {
-			const rid = newID(16);
-			Pendings[rid] = res;
-			const msg = { event, rid, data };
-			kernelConnection.write(JSON.stringify(msg) + '\n');
-		});
-
-		res();
-	});
-	kernelConnection.on('data', onChannelMessage);
-	kernelConnection.on('end', onChannelClosed);
-	kernelConnection.on('error', onChannelError);
-});
 const prepareWS = (host, port) => new Promise(res => {
 	const WebSocket = require('ws');
 	const address = `ws://${host}:${port}`;
@@ -124,6 +75,44 @@ const prepareWS = (host, port) => new Promise(res => {
 	kernelConnection.on('close', onChannelClosed);
 	kernelConnection.on('error', onChannelError);
 });
+const prepareIPC = (ipcPath) => new Promise(res => {
+	const net = require('net');
+
+	kernelConnection = net.createConnection(ipcPath, () => {
+		logger.log(`Connected to IPC server at ${ipcPath}`);
+
+		kernelConnection.send = (event, data) => {
+			const msg = { event, data };
+			kernelConnection.write(JSON.stringify(msg) + '\n');
+		};
+		kernelConnection.sendAndWait = (event, data) => new Promise(res => {
+			const rid = newID(16);
+			Pendings[rid] = res;
+			const msg = { event, rid, data };
+			kernelConnection.write(JSON.stringify(msg) + '\n');
+		});
+
+		res();
+	});
+	kernelConnection.on('data', onChannelMessage);
+	kernelConnection.on('end', onChannelClosed);
+	kernelConnection.on('error', onChannelError);
+});
+const prepareWorker = () => {
+	process.on('message', onChannelMessage);
+
+	kernelConnection = {};
+	kernelConnection.send = (event, data) => {
+		const msg = { event, data };
+		process.send(msg);
+	};
+	kernelConnection.sendAndWait = (event, data) => new Promise(res => {
+		const rid = newID(16);
+		Pendings[rid] = res;
+		const msg = { event, rid, data };
+		process.send(msg);
+	});
+};
 
 /**
  * 启动服务响应节点
@@ -132,40 +121,60 @@ const prepareWS = (host, port) => new Promise(res => {
 const start = async (configPath) => {
 	logger.log(`Service node starting with ID: ${EgoNodeId}`);
 
-	const config = await loadConfig(configPath);
+	const config = await loadConfig(configPath, DefaultConfig);
 	if (!config || !config.master || !config.master.host) {
 		logger.error('Invalid Config File');
 		return;
 	}
 
-	let myIP = getIPAddress();
-	if ([myIP, 'localhost', '127.0.0.1', '::1', '0.0.0.0', "::"].includes(config.master.host)) {
-		kernelRelation = 1;
+	if (cluster.isWorker) {
+		kernelRelation = 2;
 	}
-	if (kernelRelation === 1 && !config.master.ipc) {
-		kernelRelation = 0;
-	}
-	if (kernelRelation === 0 && !config.master.ws) {
-		logger.error('Invalid Kernel Connection Configuration');
-		return;
+	else {
+		let myIP = getIPAddress();
+		if ([myIP, 'localhost', '127.0.0.1', '::1', '0.0.0.0', "::"].includes(config.master.host)) {
+			kernelRelation = 1;
+		}
+		if (kernelRelation === 1 && !config.master.ipc) {
+			kernelRelation = 0;
+		}
+		if (kernelRelation === 0 && !config.master.ws) {
+			logger.error('Invalid Kernel Connection Configuration');
+			return;
+		}
 	}
 
 	/* 其他初始化处理 */
 	let data = {};
 
-	if (kernelRelation === 1) {
-		await prepareIPC(config.master.ipc);
-	}
-	else if (kernelRelation === 0) {
+	if (kernelRelation === 0) {
 		await prepareWS(config.master.host, config.master.ws);
 	}
+	else if (kernelRelation === 1) {
+		await prepareIPC(config.master.ipc);
+	}
+	else if (kernelRelation === 2) {
+		prepareWorker();
+		wait(3000).then(() => {
+			process.exit();
+		});
+	}
+	else {
+		return;
+	}
+
 	const reShakeHand = await kernelConnection.sendAndWait('/synego/shakehand', {
 		nid: EgoNodeId,
 		data
 	});
-	console.log('|====---::>', reShakeHand);
+	logger.log('|====---::>', reShakeHand);
 };
 
 module.exports = {
 	start,
 };
+
+// For Worker SubProcess
+if (cluster.isWorker) {
+	start(process.env.config);
+}

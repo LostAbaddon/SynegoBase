@@ -391,21 +391,9 @@ http {
 }`;
 }
 
-async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
+async function setupNginx(nginxConfig, callingProjectRoot = process.cwd()) {
 	// 如果传入的是地址，则读取真正的配置文件
-	if (isString(userConfig)) {
-		userConfig = path.join(process.cwd(), userConfig);
-		try {
-			const data = await fsp.readFile(userConfig);
-			userConfig = JSON.parse(data);
-		}
-		catch (err) {
-			logger.error('Read User Config Failed:', err);
-			userConfig = {};
-		}
-	}
-
-	const finalConfig = deepMerge(userConfig, DefaultConfig);
+	nginxConfig = await loadConfig(nginxConfig, DefaultConfig);
 
 	if (!checkNginxInstalled()) {
 		const installed = await installNginx();
@@ -414,7 +402,7 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 	}
 	logger.log('Proceeding with Nginx configuration...');
 
-	const configPath = (await getNginxConfigPath()) || userConfig.nginxConfPath;
+	const configPath = (await getNginxConfigPath()) || nginxConfig.nginxConfPath;
 	if (!configPath || !(await fileExists(path.dirname(configPath)))) {
 		logger.error('Could not determine Nginx config path or directory does not exist.');
 		return false;
@@ -428,7 +416,7 @@ async function setupNginx(userConfig = {}, callingProjectRoot = process.cwd()) {
 			await fsp.copyFile(configPath, backupPath);
 			logger.log(`Backed up existing config to ${backupPath}`);
 		}
-		const newConfigContent = await generateNginxConfig(finalConfig, callingProjectRoot);
+		const newConfigContent = await generateNginxConfig(nginxConfig, callingProjectRoot);
 		logger.info("New Nginx Configuration Generated:");
 		console.info(newConfigContent);
 		await fsp.writeFile(configPath, newConfigContent);

@@ -2,6 +2,7 @@ const os = require('os');
 const fs = require('fs');
 const fsp = require('fs').promises;
 const path = require('path');
+const cluster = require('cluster');
 const { Transform } = require('stream');
 
 require('../common/common'); // 常用函数与工具集
@@ -101,34 +102,6 @@ const DefaultConfig = {
 		"ipc": "/tmp/synego_communicate.sock"
 	}
 };
-// --- 配置加载 ---
-const loadConfig = async (configPath) => {
-	if (!configPath) {
-		logger.warn('No config file path provided. Using default configuration.');
-		return DefaultConfig;
-	}
-	try {
-		if (await fileExists(configPath)) {
-			logger.log(`Loading configuration from: ${configPath}`);
-			const configData = await fsp.readFile(configPath, 'utf8');
-			try {
-				return deepMerge(JSON.parse(configData), DefaultConfig);
-			}
-			catch (err) {
-				logger.error(`Load Configuration Failed: ${err.message}`);
-				return DefaultConfig;
-			}
-		}
-		else {
-			logger.warn(`Config file not found at ${configPath}. Using default configuration.`);
-			return DefaultConfig;
-		}
-	}
-	catch (error) {
-		logger.error(`Error reading or parsing config file: ${error.message}`);
-		return DefaultConfig;
-	}
-};
 
 // --- 各模块初始化 ---
 
@@ -140,7 +113,6 @@ const setupTCPServer = (port) => new Promise(res => {
 		socket.pipe(parser);
 		const sender = (data) => socket.write(JSON.stringify(data) + '\n');
 		sender.id = newID();
-		WorkerGroup[sender.id] = sender;
 
 		parser.on('data', async (message) => {
 			const msg = convertParma(message.toString().trim());
@@ -163,11 +135,7 @@ const setupTCPServer = (port) => new Promise(res => {
 				});
 			}
 			catch (err) {
-				logger.error('Service Error: ' + err.message);
-				reply = {
-					code: 500,
-					error: "service down",
-				};
+				reply = commonErrorHandler(err);
 			}
 			if (rid) reply.rid = rid;
 			sender(reply);
@@ -227,11 +195,7 @@ const setupUDPServer = (port) => new Promise(res => {
 			});
 		}
 		catch (err) {
-			logger.error('Service Error: ' + err.message);
-			reply = {
-				code: 500,
-				error: "service down",
-			};
+			reply = commonErrorHandler(err);
 		}
 		if (rid) reply.rid = rid;
 		udpServer.send(JSON.stringify(reply), realPort, realIp);
@@ -281,11 +245,7 @@ const setupGRPCServer = (port, protoFilePath) => new Promise(async res => {
 					});
 				}
 				catch (err) {
-					logger.error('Service Error: ' + err.message);
-					reply = {
-						code: 500,
-						error: "service down",
-					};
+					reply = commonErrorHandler(err);
 				}
 				if (rid) reply.rid = rid;
 				callback(null, { reply: JSON.stringify(reply) });
@@ -318,7 +278,6 @@ const setupIPCServer = (ipc_path) => new Promise(async res => {
 	const ipcServer = net.createServer((socket) => {
 		const sender = (data) => socket.write(JSON.stringify(data) + '\n');
 		sender.id = newID();
-		WorkerGroup[sender.id] = sender;
 		logger.log('IPC client connected.');
 
 		socket.on('data', async (data) => {
@@ -342,11 +301,7 @@ const setupIPCServer = (ipc_path) => new Promise(async res => {
 				});
 			}
 			catch (err) {
-				logger.error('Service Error: ' + err.message);
-				reply = {
-					code: 500,
-					error: "service down",
-				};
+				reply = commonErrorHandler(err);
 			}
 			if (rid) reply.rid = rid;
 			sender(reply);
@@ -374,7 +329,6 @@ const setupWebSocketServer = (server) => {
 	wss.on('connection', (ws, req) => {
 		const sender = (data) => ws.send(JSON.stringify(data));
 		sender.id = newID();
-		WorkerGroup[sender.id] = sender;
 		const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 		logger.log(`WebSocket client connected from ${ip}`);
 
@@ -399,11 +353,7 @@ const setupWebSocketServer = (server) => {
 				});
 			}
 			catch (err) {
-				logger.error('Service Error: ' + err.message);
-				reply = {
-					code: 500,
-					error: "service down",
-				};
+				reply = commonErrorHandler(err);
 			}
 			if (rid) reply.rid = rid;
 			sender(reply);
@@ -414,6 +364,44 @@ const setupWebSocketServer = (server) => {
 		});
 	});
 	logger.log(`WebSocket Server attached to ${server instanceof https.Server ? 'HTTPS' : 'HTTP'} server.`);
+};
+/* SubProcess Server */
+const setupSubProcessServer = (worker, workerConfigPath) => {
+	const sender = (data) => worker.send(data);
+	sender.id = newID();
+	worker.on('message', async (msg) => {
+		if (!isObject(msg) || !msg.event) {
+			return;
+		}
+		const rid = msg.rid;
+		let reply;
+		try {
+			reply = await requestHandler({
+				protocol: 'worker',
+				ip: "subprocess",
+				method: msg.method || 'GET',
+				url: msg.event,
+				body: msg.data,
+				params: {},
+				query: {},
+				rawUrl: msg.event,
+				sender,
+			});
+		}
+		catch (err) {
+			reply = commonErrorHandler(err);
+		}
+		if (rid) reply.rid = rid;
+		sender(reply);
+	});
+	worker.on('exit', () => {
+		delete WorkerGroup[sender.id];
+		logger.log(`SubProcess Worker disconnected: ${worker.process.pid}`);
+		// Restart a Worker
+		wait(1000).then(() => {
+			setupSubProcessServer(cluster.fork({config: workerConfigPath}), workerConfigPath);
+		});
+	});
 };
 
 // --- 内部功能 ---
@@ -426,8 +414,16 @@ InnerResponsor['/synego/shakehand'] = (data, query, params, protocol, method, ip
 			reason: 'No ID'
 		}
 	}
+	if (!sender.id) {
+		return {
+			success: false,
+			reason: 'No Channel ID'
+		}
+	}
 
-	console.log(protocol, sender);
+	logger.log(protocol, ' >>>> ', sender);
+	WorkerGroup[sender.id] = sender;
+
 	return {
 		success: true,
 		nodeID: EgoNodeId
@@ -471,16 +467,23 @@ const requestHandler = async (requestData) => {
 		}
 	}
 };
+const commonErrorHandler = (err) => {
+	logger.error('Event Handler Failed: ' + err.message);
+	return {
+		code: 500,
+		error: "service down",
+	};
+}
 
 /**
  * 启动主响应节点
  * @param {string} [configPath] - 配置文件的可选路径。
  */
-const start = async (configPath) => {
-	const config = await loadConfig(configPath);
+const start = async (configPath, workerConfigPath, workerCount) => {
+	const config = await loadConfig(configPath, DefaultConfig);
 	const initTasks = [];
 
-	// --- HTTP/HTTPS/WS 服务器 ---
+	// HTTP/HTTPS/WS 服务器
 	if ((config.http?.enabled && config.http?.port) || (config.https?.enabled && config.https?.port) || (config.upload?.enabled && config.upload?.urlpath)) {
 		const express = require('express');
 		const cors = require('cors');
@@ -602,11 +605,8 @@ const start = async (configPath) => {
 				if (!res.headersSent) res.status(200).send(reply);
 			}
 			catch (err) {
-				logger.error(`Request Handler Error: ${err.message}`);
-				if (!res.headersSent) res.status(500).send({
-					code: 500,
-					error: "service down",
-				});
+				const reply = commonErrorHandler(err);
+				if (!res.headersSent) res.status(500).send(reply);
 			}
 		});
 
@@ -633,29 +633,49 @@ const start = async (configPath) => {
 		}
 	}
 
-	// --- TCP 服务器 ---
+	// TCP 服务器
 	if (config.tcp?.enabled && config.tcp?.port) {
 		initTasks.push(setupTCPServer(config.tcp.port));
 	}
 
-	// --- UDP 服务器 ---
+	// UDP 服务器
 	if (config.udp?.enabled && config.udp?.port) {
 		initTasks.push(setupUDPServer(config.udp.port));
 	}
 
-	// --- gRPC 服务器 ---
+	// gRPC 服务器
 	if (config.grpc?.enabled && config.grpc?.port && config.grpc?.proto) {
 		initTasks.push(setupGRPCServer(config.grpc.port, config.grpc.proto));
 	}
 
-	// --- 命令行接口 (IPC) 服务器 ---
+	// 命令行接口 (IPC) 服务器
 	if (config.cli?.enabled && config.cli?.ipc_path) {
 		initTasks.push(setupIPCServer(config.cli.ipc_path));
 	}
 
-	// --- 集群内部通讯 ---
+	// 集群内部通讯
 	if (config.shakehand?.ipc) {
 		initTasks.push(setupIPCServer(config.shakehand.ipc));
+	}
+
+	// 使用 Cluster 模式启动 Worker
+	if (!!workerConfigPath && (await fileExists(workerConfigPath))) {
+		let count = os.cpus().length;
+		if (workerCount > 0) {
+			workerCount = Math.min(Math.max(count - 2, 1), workerCount);
+		}
+		else {
+			workerCount = Math.max(count - 2, 1);
+		}
+		if (workerConfigPath.match(/^\./)) workerConfigPath = path.join(process.cwd(), workerConfigPath);
+
+		logger.log('Launch Worker: ' + workerCount);
+		cluster.setupPrimary({
+			exec: path.join(__dirname, 'workerNode.js')
+		});
+		for (let i = 0; i < workerCount; i ++) {
+			setupSubProcessServer(cluster.fork({config: workerConfigPath}), workerConfigPath);
+		}
 	}
 
 	await Promise.all(initTasks);
