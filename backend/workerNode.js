@@ -11,6 +11,7 @@ const logger = new Logger('Worker' + (cluster.isWorker ? '-' + process.pid : '')
 const { generateNodeId, getIPAddress } = require('../common/identity');
 const EgoNodeId = generateNodeId();
 
+let rootPath = process.cwd();
 let kernelRelation = 0; // 0: Other node; 1: Same node other process; 2: Same node same process.
 let kernelConnection = null;
 
@@ -119,6 +120,7 @@ const prepareWorker = () => {
  * @param {string} [configPath] - 配置文件的可选路径。
  */
 const start = async (configPath) => {
+	if (configPath.match(/^\./)) configPath = path.join(rootPath, configPath);
 	logger.log(`Service node starting with ID: ${EgoNodeId}`);
 
 	const config = await loadConfig(configPath, DefaultConfig);
@@ -173,5 +175,7 @@ module.exports = {
 
 // For Worker SubProcess
 if (cluster.isWorker) {
+	rootPath = process.env.rootPath;
+	logger.log(process.cwd(), rootPath);
 	start(process.env.config);
 }

@@ -24,205 +24,333 @@
 	</style>
 </head>
 <body>
+<h1>SynegoBase Test Page</h1>
 
-	<h1>SynegoBase Test Page</h1>
+<!-- General API Test -->
+<div class="container">
+	<h2>General API Test</h2>
+	<p>Sends a request to a generic endpoint. The backend should log the received data.</p>
+	<button id="get-request">Send GET Request</button>
+	<button id="post-request">Send POST (JSON) Request</button>
+	<pre id="api-response">API Response will appear here.</pre>
+</div>
 
-	<!-- General API Test -->
-	<div class="container">
-		<h2>General API Test</h2>
-		<p>Sends a request to a generic endpoint. The backend should log the received data.</p>
-		<button id="get-request">Send GET Request</button>
-		<button id="post-request">Send POST (JSON) Request</button>
-		<pre id="api-response">API Response will appear here.</pre>
+<!-- Form Submission -->
+<div class="container">
+	<h2>Form Submission Test</h2>
+	<p>Submits a standard HTML form (application/x-www-form-urlencoded).</p>
+	<form id="test-form">
+		<input type="text" name="username" placeholder="Username" value="testuser">
+		<input type="email" name="email" placeholder="Email" value="test@example.com">
+		<button type="submit">Submit Form</button>
+	</form>
+	<pre id="form-response">Form submission response will appear here.</pre>
+</div>
+
+<!-- File Upload -->
+<div class="container">
+	<h2>File Upload Test</h2>
+	<p>Uploads a file via multipart/form-data to the configured upload endpoint.</p>
+	<form id="upload-form">
+		<input type="file" id="file-input" name="file" required>
+		<button type="submit">Upload File</button>
+	</form>
+	<pre id="upload-response">Upload response will appear here.</pre>
+</div>
+
+<!-- WebSocket Test -->
+<div class="container">
+	<h2>WebSocket Test</h2>
+	<p>Establishes a WebSocket connection to send and receive messages.</p>
+	<button id="ws-connect">Connect</button>
+	<button id="ws-disconnect" disabled>Disconnect</button>
+	<div style="margin-top: 10px;">
+		<input type="text" id="ws-message" placeholder="Message to send" disabled>
+		<button id="ws-send" disabled>Send</button>
 	</div>
+	<div class="log-box" id="ws-log"></div>
+</div>
 
-	<!-- Form Submission -->
-	<div class="container">
-		<h2>Form Submission Test</h2>
-		<p>Submits a standard HTML form (application/x-www-form-urlencoded).</p>
-		<form id="test-form">
-			<input type="text" name="username" placeholder="Username" value="testuser">
-			<input type="email" name="email" placeholder="Email" value="test@example.com">
-			<button type="submit">Submit Form</button>
-		</form>
-		<pre id="form-response">Form submission response will appear here.</pre>
-	</div>
+<script>
+const uploadPath = location.protocol === 'file:' ? 'http://localhost:3000/upload-callback/' : "/upload/"; // Default upload path
 
-	<!-- File Upload -->
-	<div class="container">
-		<h2>File Upload Test</h2>
-		<p>Uploads a file via multipart/form-data to the configured upload endpoint.</p>
-		<form id="upload-form">
-			<input type="file" id="file-input" name="file" required>
-			<button type="submit">Upload File</button>
-		</form>
-		<pre id="upload-response">Upload response will appear here.</pre>
-	</div>
+const apiResponseEl = document.getElementById('api-response');
+const formResponseEl = document.getElementById('form-response');
+const uploadResponseEl = document.getElementById('upload-response');
 
-	<!-- WebSocket Test -->
-	<div class="container">
-		<h2>WebSocket Test</h2>
-		<p>Establishes a WebSocket connection to send and receive messages.</p>
-		<button id="ws-connect">Connect</button>
-		<button id="ws-disconnect" disabled>Disconnect</button>
-		<div style="margin-top: 10px;">
-			<input type="text" id="ws-message" placeholder="Message to send" disabled>
-			<button id="ws-send" disabled>Send</button>
-		</div>
-		<div class="log-box" id="ws-log"></div>
-	</div>
+// --- Helper Function ---
+const displayResult = (element, data, isError = false) => {
+	element.textContent = JSON.stringify(data, null, 2);
+	element.style.color = isError ? '#dc3545' : '#333';
+};
 
-	<script>
-		const uploadPath = location.protocol === 'file:' ? 'http://localhost:3000/upload-callback/' : "/upload/"; // Default upload path
+// --- General API Test ---
+document.getElementById('get-request').addEventListener('click', async () => {
+	try {
+		const res = await fetch(`/api/test?param=123`);
+		if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+		const text = await res.text();
+		displayResult(apiResponseEl, { status: res.status, text });
+	} catch (e) {
+		displayResult(apiResponseEl, { error: e.message }, true);
+	}
+});
 
-		const apiResponseEl = document.getElementById('api-response');
-		const formResponseEl = document.getElementById('form-response');
-		const uploadResponseEl = document.getElementById('upload-response');
-
-		// --- Helper Function ---
-		const displayResult = (element, data, isError = false) => {
-			element.textContent = JSON.stringify(data, null, 2);
-			element.style.color = isError ? '#dc3545' : '#333';
-		};
-
-		// --- General API Test ---
-		document.getElementById('get-request').addEventListener('click', async () => {
-			try {
-				const res = await fetch(`/api/test?param=123`);
-				if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-				const text = await res.text();
-				displayResult(apiResponseEl, { status: res.status, text });
-			} catch (e) {
-				displayResult(apiResponseEl, { error: e.message }, true);
-			}
+document.getElementById('post-request').addEventListener('click', async () => {
+	try {
+		const res = await fetch(`/api/submit`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ user: 'test', value: 42 })
 		});
+		if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+		const text = await res.text();
+		displayResult(apiResponseEl, { status: res.status, text });
+	} catch (e) {
+		displayResult(apiResponseEl, { error: e.message }, true);
+	}
+});
 
-		document.getElementById('post-request').addEventListener('click', async () => {
-			try {
-				const res = await fetch(`/api/submit`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ user: 'test', value: 42 })
+// --- Form Submission ---
+document.getElementById('test-form').addEventListener('submit', async (e) => {
+	e.preventDefault();
+	const formData = new URLSearchParams(new FormData(e.target));
+	try {
+		const res = await fetch(`/api/form-submit`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			body: formData
+		});
+		if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+		const text = await res.text();
+		displayResult(formResponseEl, { status: res.status, text });
+	} catch (err) {
+		displayResult(formResponseEl, { error: err.message }, true);
+	}
+});
+
+// --- File Upload ---
+document.getElementById('upload-form').addEventListener('submit', async (e) => {
+	e.preventDefault();
+	const fileInput = document.getElementById('file-input');
+	if (fileInput.files.length === 0) {
+		displayResult(uploadResponseEl, { error: 'Please select a file first.' }, true);
+		return;
+	}
+	const formData = new FormData();
+	formData.append('file', fileInput.files[0]);
+	try {
+		const res = await fetch(uploadPath, {
+			method: 'POST',
+			body: formData
+		});
+		const json = await res.json();
+		if (!res.ok) throw new Error(json.error || `HTTP error! status: ${res.status}`);
+		displayResult(uploadResponseEl, json);
+	} catch (err) {
+		displayResult(uploadResponseEl, { error: err.message }, true);
+	}
+});
+
+// --- WebSocket Test ---
+const wsConnectBtn = document.getElementById('ws-connect');
+const wsDisconnectBtn = document.getElementById('ws-disconnect');
+const wsMessageInput = document.getElementById('ws-message');
+const wsSendBtn = document.getElementById('ws-send');
+const wsLogEl = document.getElementById('ws-log');
+let ws = null;
+
+class WSwithHearbeat {
+	static HeartBeatPing = 'heartbeat_ping';
+	static HeartBeatPong = 'heartbeat_pong';
+	static WSEvents = ['open', 'close', 'message', 'error'];
+
+	#heartbeatInterval = 30000;
+	#idleDuration = 300000;
+
+	#ws;
+	#events = {};
+
+	#timerHeartBeat;
+	#timerIdleMonitor;
+
+	constructor (url, hbInterval=30000, idleDuration=300000) {
+		this.#heartbeatInterval = hbInterval;
+		this.#idleDuration = idleDuration;
+
+		this.#ws = new WebSocket(url);
+		let time = Date.now();
+
+		this.#ws.onopen = (...args) => {
+			if (!!this.onopen) {
+				this.onopen(...args);
+			}
+			if (!!this.#events.open) {
+				this.#events.open.some(cb => {
+					const out = cb(...args);
+					if (out === true) return true;
 				});
-				if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-				const text = await res.text();
-				displayResult(apiResponseEl, { status: res.status, text });
-			} catch (e) {
-				displayResult(apiResponseEl, { error: e.message }, true);
-			}
-		});
-
-		// --- Form Submission ---
-		document.getElementById('test-form').addEventListener('submit', async (e) => {
-			e.preventDefault();
-			const formData = new URLSearchParams(new FormData(e.target));
-			try {
-				const res = await fetch(`/api/form-submit`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-					body: formData
-				});
-				if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-				const text = await res.text();
-				displayResult(formResponseEl, { status: res.status, text });
-			} catch (err) {
-				displayResult(formResponseEl, { error: err.message }, true);
-			}
-		});
-
-		// --- File Upload ---
-		document.getElementById('upload-form').addEventListener('submit', async (e) => {
-			e.preventDefault();
-			const fileInput = document.getElementById('file-input');
-			if (fileInput.files.length === 0) {
-				displayResult(uploadResponseEl, { error: 'Please select a file first.' }, true);
-				return;
-			}
-			const formData = new FormData();
-			formData.append('file', fileInput.files[0]);
-			try {
-				const res = await fetch(uploadPath, {
-					method: 'POST',
-					body: formData
-				});
-				const json = await res.json();
-				if (!res.ok) throw new Error(json.error || `HTTP error! status: ${res.status}`);
-				displayResult(uploadResponseEl, json);
-			} catch (err) {
-				displayResult(uploadResponseEl, { error: err.message }, true);
-			}
-		});
-
-		// --- WebSocket Test ---
-		const wsConnectBtn = document.getElementById('ws-connect');
-		const wsDisconnectBtn = document.getElementById('ws-disconnect');
-		const wsMessageInput = document.getElementById('ws-message');
-		const wsSendBtn = document.getElementById('ws-send');
-		const wsLogEl = document.getElementById('ws-log');
-		let ws = null;
-
-		const logWs = (message, type = 'info') => {
-			const entry = document.createElement('div');
-			entry.className = `log-entry ${type}`;
-			entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-			wsLogEl.appendChild(entry);
-			wsLogEl.scrollTop = wsLogEl.scrollHeight;
-		};
-
-		wsConnectBtn.addEventListener('click', () => {
-			if (ws) return;
-			const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-			const wsUrl = location.protocol === 'file:' ? 'ws://localhost:3000' : `${wsProtocol}//${window.location.host}/ws/`;
-			ws = new WebSocket(wsUrl);
-			
-			ws.onopen = () => {
-				logWs('Connection opened', 'info');
-				wsConnectBtn.disabled = true;
-				wsDisconnectBtn.disabled = false;
-				wsMessageInput.disabled = false;
-				wsSendBtn.disabled = false;
-			};
-			
-			ws.onmessage = (event) => {
-				logWs(`Received: ${event.data}`, 'received');
-			};
-			
-			ws.onerror = (error) => {
-				logWs(`WebSocket Error: ${error.message || 'An unknown error occurred'}`, 'error');
-				console.error('WebSocket Error:', error);
-			};
-			
-			ws.onclose = () => {
-				logWs('Connection closed', 'info');
-				wsConnectBtn.disabled = false;
-				wsDisconnectBtn.disabled = true;
-				wsMessageInput.disabled = true;
-				wsSendBtn.disabled = true;
-				ws = null;
-			};
-		});
-
-		wsDisconnectBtn.addEventListener('click', () => {
-			if (ws) ws.close();
-		});
-
-		const sendWsMessage = () => {
-			if (ws && ws.readyState === WebSocket.OPEN && wsMessageInput.value) {
-				const message = {
-					event: "/test",
-					data: wsMessageInput.value
-				};
-				logWs("Sent:,", message, "sent");
-				ws.send(JSON.stringify(message));
-				wsMessageInput.value = '';
 			}
 		};
+		this.#ws.onerror = (...args) => {
+			if (!!this.onerror) {
+				this.onerror(...args);
+			}
+			if (!!this.#events.error) {
+				this.#events.error.some(cb => {
+					const out = cb(...args);
+					if (out === true) return true;
+				});
+			}
+		};
+		this.#ws.onclose = () => {
+			if (!!this.#timerHeartBeat) clearTimeout(this.#timerHeartBeat);
+			if (!!this.#timerIdleMonitor) clearTimeout(this.#timerIdleMonitor);
 
-		wsSendBtn.addEventListener('click', sendWsMessage);
-		wsMessageInput.addEventListener('keydown', (e) => {
-			if (e.key === 'Enter') sendWsMessage();
-		});
+			if (!!this.onclose) {
+				this.onclose();
+			}
+			if (!!this.#events.close) {
+				this.#events.close.some(cb => {
+					const out = cb(...args);
+					if (out === true) return true;
+				});
+			}
 
-	</script>
+			this.#ws = null;
+		};
+		this.#ws.onmessage = (event) => {
+			this.#resetHeartbeat();
+			if (event.data === WSwithHearbeat.HeartBeatPong) return;
+			this.#resetIdle();
+
+			if (!!this.onmessage) {
+				this.onmessage(event);
+			}
+			if (!!this.#events.message) {
+				this.#events.message.some(cb => {
+					const out = cb(...args);
+					if (out === true) return true;
+				});
+			}
+		};
+
+		this.#resetHeartbeat();
+		this.#resetIdle();
+	}
+	send (message) {
+		this.#resetHeartbeat();
+		this.#resetIdle();
+
+		this.#ws.send(message);
+	}
+	close () {
+		this.#ws.close();
+	}
+	on (event, callback) {
+		if (!WSwithHearbeat.WSEvents.includes(event)) return;
+		if (!this.#events[event]) {
+			this.#events[event] = [];
+		}
+		this.#events[event].push(callback);
+	}
+
+	#resetHeartbeat () {
+		if (!!this.#timerHeartBeat) clearTimeout(this.#timerHeartBeat);
+		this.#timerHeartBeat = setTimeout(() => {
+			this.#ws.send(WSwithHearbeat.HeartBeatPing);
+		}, this.#heartbeatInterval);
+	}
+	#resetIdle () {
+		if (!!this.#timerIdleMonitor) clearTimeout(this.#timerIdleMonitor);
+		this.#timerIdleMonitor = setTimeout(() => {
+			this.#ws.close();
+		}, this.#idleDuration);
+	}
+
+	onmessage = null;
+	onclose = null;
+	onerror = null;
+	onopen = null;
+
+	get readyState () {
+		return this.#ws.readyState;
+	}
+	get url () {
+		return this.#ws.url;
+	}
+	get protocol () {
+		return this.#ws.protocol;
+	}
+	get binaryType () {
+		return this.#ws.binaryType;
+	}
+	get bufferedAmount () {
+		return this.#ws.bufferedAmount;
+	}
+	get extensions () {
+		return this.#ws.extensions;
+	}
+}
+
+const logWs = (message, type = 'info') => {
+	const entry = document.createElement('div');
+	entry.className = `log-entry ${type}`;
+	entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+	wsLogEl.appendChild(entry);
+	wsLogEl.scrollTop = wsLogEl.scrollHeight;
+};
+
+wsConnectBtn.addEventListener('click', () => {
+	if (ws) return;
+	const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+	const wsUrl = location.protocol === 'file:' ? 'ws://localhost:3000' : `${wsProtocol}//${window.location.host}/ws/`;
+	ws = new WSwithHearbeat(wsUrl);
+
+	ws.onopen = () => {
+		logWs('Connection opened', 'info');
+		wsConnectBtn.disabled = true;
+		wsDisconnectBtn.disabled = false;
+		wsMessageInput.disabled = false;
+		wsSendBtn.disabled = false;
+	};
+	ws.onmessage = (event) => {
+		logWs(`Received: ${event.data}`, 'received');
+	};
+	ws.onerror = (error) => {
+		logWs(`WebSocket Error: ${error.message || 'An unknown error occurred'}`, 'error');
+		console.error('WebSocket Error:', error);
+	};
+	ws.onclose = () => {
+		logWs('Connection closed', 'info');
+		wsConnectBtn.disabled = false;
+		wsDisconnectBtn.disabled = true;
+		wsMessageInput.disabled = true;
+		wsSendBtn.disabled = true;
+		ws = null;
+	};
+});
+
+wsDisconnectBtn.addEventListener('click', () => {
+	if (ws) ws.close();
+});
+
+const sendWsMessage = () => {
+	if (ws && ws.readyState === WebSocket.OPEN && wsMessageInput.value) {
+		const message = {
+			event: "/test",
+			data: wsMessageInput.value
+		};
+		logWs("Sent: " + JSON.stringify(message), "sent");
+		ws.send(JSON.stringify(message));
+		wsMessageInput.value = '';
+	}
+};
+
+wsSendBtn.addEventListener('click', sendWsMessage);
+wsMessageInput.addEventListener('keydown', (e) => {
+	if (e.key === 'Enter') sendWsMessage();
+});
+</script>
 </body>
 </html>

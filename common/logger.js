@@ -58,6 +58,13 @@
 	};
 
 	// --- 3. Logger 类实现 ---
+	const LoggerLevel = {
+		"log": 0,
+		"info": 1,
+		"warn": 2,
+		"error": 3
+	};
+
 	class Logger {
 		/**
 		 * 创建一个 Logger 实例.
@@ -69,12 +76,14 @@
 			}
 			this.context = context;
 		}
-
 		/**
 		 * 内部核心打印方法
 		 * @private
 		 */
 		_print(level, args) {
+			const l = LoggerLevel[level] || 0;
+			if (l < Logger.level) return;
+
 			const contextPrefix = `[${this.context}]`;
 
 			if (ENV === Environments.BROWSER) {
@@ -101,7 +110,6 @@
 				console[level](contextPrefix, ...args);
 			}
 		}
-
 		/**
 		 * 输出参考信息 (蓝色/默认).
 		 * @param	{...any} args - 要打印的内容.
@@ -109,7 +117,6 @@
 		info(...args) {
 			this._print('info', args);
 		}
-
 		/**
 		 * 输出通用日志 (绿色).
 		 * @param	{...any} args - 要打印的内容.
@@ -117,7 +124,6 @@
 		log(...args) {
 			this._print('log', args);
 		}
-
 		/**
 		 * 输出警告信息 (黄色).
 		 * @param	{...any} args - 要打印的内容.
@@ -125,13 +131,19 @@
 		warn(...args) {
 			this._print('warn', args);
 		}
-
 		/**
 		 * 输出错误信息 (红色).
 		 * @param	{...any} args - 要打印的内容.
 		 */
 		error(...args) {
 			this._print('error', args);
+		}
+
+		static level = 0;
+		static setLevel (level) {
+			if (!(level >= 0 && level < 5)) return;
+			level = Math.floor(level);
+			Logger.level = level;
 		}
 	}
 

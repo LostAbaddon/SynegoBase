@@ -12,6 +12,10 @@ const logger = new Logger('Kernel');
 const { generateNodeId } = require('../common/identity');
 const EgoNodeId = generateNodeId();
 
+const ShakeHandHosts = [];
+const MemberManager = require('./memberCenter');
+const EventCenter = require('./eventCenter');
+
 // ---- 辅助类 ---
 class ProtocolParser extends Transform {
 	constructor(socket) {
@@ -130,20 +134,21 @@ const setupTCPServer = (port) => new Promise(res => {
 					body: msg.data,
 					params: {},
 					query: {},
-					rawUrl: msg.event,
+					host: "tcp://" + port,
+					rawUrl: "tcp://" + port + (msg.event.match(/^\?/) ? "" : '/') + msg.event,
 					sender,
 				});
 			}
 			catch (err) {
 				reply = commonErrorHandler(err);
 			}
-			if (rid) reply.rid = rid;
+			if (rid && reply) reply.rid = rid;
 			sender(reply);
 		});
 
 		socket.on('error', (err) => logger.error('TCP Socket Error: ', err));
 		socket.on('end', () => {
-			delete WorkerGroup[sender.id];
+			MemberManager.signOut(sender.id);
 			logger.log(`TCP client from ${parser.realIp} disconnected`);
 		});
 	});
@@ -190,14 +195,15 @@ const setupUDPServer = (port) => new Promise(res => {
 				body: msg.data,
 				params: {},
 				query: {},
-				rawUrl: msg.event,
+				host: "udp://" + port,
+				rawUrl: "udp://" + port + (msg.event.match(/^\?/) ? "" : '/') + msg.event,
 				sender: (data) => udpServer.send(JSON.stringify(data), realPort, realIp),
 			});
 		}
 		catch (err) {
 			reply = commonErrorHandler(err);
 		}
-		if (rid) reply.rid = rid;
+		if (rid && reply) reply.rid = rid;
 		udpServer.send(JSON.stringify(reply), realPort, realIp);
 	});
 	udpServer.on('listening', () => {
@@ -240,14 +246,15 @@ const setupGRPCServer = (port, protoFilePath) => new Promise(async res => {
 						body: msg.data,
 						params: {},
 						query: {},
-						rawUrl: msg.event,
+						host: "grpc://" + port,
+						rawUrl: "grpc://" + port + (msg.event.match(/^\?/) ? "" : '/') + msg.event,
 						sender: data => callback(null, { reply: JSON.stringify(data) })
 					});
 				}
 				catch (err) {
 					reply = commonErrorHandler(err);
 				}
-				if (rid) reply.rid = rid;
+				if (rid && reply) reply.rid = rid;
 				callback(null, { reply: JSON.stringify(reply) });
 			}
 		});
@@ -262,7 +269,7 @@ const setupGRPCServer = (port, protoFilePath) => new Promise(async res => {
 		});
 	}
 	catch (error) {
-		logger.error(`Could not start gRPC server: ${error.message}`);
+		logger.error("Could not start gRPC server:", error);
 		res();
 	}
 });
@@ -296,21 +303,22 @@ const setupIPCServer = (ipc_path) => new Promise(async res => {
 					body: msg.data,
 					params: {},
 					query: {},
-					rawUrl: msg.event,
+					host: "ipc://" + ipc_path,
+					rawUrl: "ipc://" + ipc_path + (msg.event.match(/^\?/) ? "" : '/') + msg.event,
 					sender,
 				});
 			}
 			catch (err) {
 				reply = commonErrorHandler(err);
 			}
-			if (rid) reply.rid = rid;
+			if (rid && reply) reply.rid = rid;
 			sender(reply);
 		});
-		socket.on('end', () => logger.log('CLI client disconnected.'));
-		socket.on('error', (err) => {
-			delete WorkerGroup[sender.id];
-			logger.error('IPC Socket Error:', err);
+		socket.on('end', () => {
+			MemberManager.signOut(sender.id);
+			logger.log('IPC client disconnected.')
 		});
+		socket.on('error', (err) => logger.error('IPC Socket Error:', err));
 	});
 	ipcServer.listen(ipcPath, () => {
 		logger.log(`IPC server listening on ${ipcPath}`);
@@ -322,7 +330,7 @@ const setupIPCServer = (ipc_path) => new Promise(async res => {
 	});
 });
 /* WebSocket Server */
-const setupWebSocketServer = (server) => {
+const setupWebSocketServer = (server, port) => {
 	const https = require('https');
 	const WebSocket = require('ws');
 	const wss = new WebSocket.Server({ server });
@@ -334,32 +342,38 @@ const setupWebSocketServer = (server) => {
 
 		ws.on('message', async (message) => {
 			const msg = convertParma(message.toString().trim());
+			if (msg === 'heartbeat_ping') {
+				ws.send('heartbeat_pong');
+				return;
+			}
 			if (!isObject(msg) || !msg.event) {
 				return;
 			}
 			const rid = msg.rid;
 			let reply;
 			try {
+				const protocol = server instanceof https.Server ? 'wss' : 'ws';
 				reply = await requestHandler({
-					protocol: server instanceof https.Server ? 'wss' : 'ws',
+					protocol,
 					ip: ip,
 					method: msg.method || 'GET',
 					url: msg.event,
 					body: msg.data,
 					params: {},
 					query: {},
-					rawUrl: msg.event,
+					host: protocol + "://" + port,
+					rawUrl: protocol + "://" + port + (msg.event.match(/^\?/) ? "" : '/') + msg.event,
 					sender,
 				});
 			}
 			catch (err) {
 				reply = commonErrorHandler(err);
 			}
-			if (rid) reply.rid = rid;
+			if (rid && reply) reply.rid = rid;
 			sender(reply);
 		});
 		ws.on('close', () => {
-			delete WorkerGroup[sender.id];
+			MemberManager.signOut(sender.id);
 			logger.log(`WebSocket client disconnected: ${ip}`);
 		});
 	});
@@ -384,29 +398,33 @@ const setupSubProcessServer = (worker, workerConfigPath) => {
 				body: msg.data,
 				params: {},
 				query: {},
-				rawUrl: msg.event,
+				host: "worker://" + worker.process.pid,
+				rawUrl: "worker://" + worker.process.pid + (msg.event.match(/^\?/) ? "" : '/') + msg.event,
 				sender,
 			});
 		}
 		catch (err) {
 			reply = commonErrorHandler(err);
 		}
-		if (rid) reply.rid = rid;
+		if (rid && reply) reply.rid = rid;
 		sender(reply);
 	});
 	worker.on('exit', () => {
-		delete WorkerGroup[sender.id];
+		MemberManager.signOut(sender.id);
 		logger.log(`SubProcess Worker disconnected: ${worker.process.pid}`);
 		// Restart a Worker
 		wait(1000).then(() => {
-			setupSubProcessServer(cluster.fork({config: workerConfigPath}), workerConfigPath);
+			setupSubProcessServer(cluster.fork({
+				rootPath: process.cwd(),
+				config: workerConfigPath
+			}), workerConfigPath);
 		});
 	});
 };
 
 // --- 内部功能 ---
 const InnerResponsor = {};
-InnerResponsor['/synego/shakehand'] = (data, query, params, protocol, method, ip, sender) => {
+InnerResponsor['/synego/shakehand'] = (data, query, params, protocol, method, remoteIP, host, sender) => {
 	const nodeID = data.nid;
 	if (!nodeID) {
 		return {
@@ -421,8 +439,15 @@ InnerResponsor['/synego/shakehand'] = (data, query, params, protocol, method, ip
 		}
 	}
 
-	logger.log(protocol, ' >>>> ', sender);
-	WorkerGroup[sender.id] = sender;
+	if (remoteIP !== 'subprocess' && !ShakeHandHosts.includes(host)) {
+		logger.warn('Invalid Shakehand: ' + remoteIP + " via " + host);
+		return {
+			success: false,
+			reason: 'Invalid Shakehand Channel'
+		}
+	}
+
+	MemberManager.signIn(data, sender);
 
 	return {
 		success: true,
@@ -430,45 +455,34 @@ InnerResponsor['/synego/shakehand'] = (data, query, params, protocol, method, ip
 	}
 };
 
-// --- 注册服务 ---
-const ServiceResponsor = {};
-
-// --- 节点集群 ---
-const WorkerGroup = {};
-
 // --- 统一请求处理函数 ---
 const requestHandler = async (requestData) => {
-	const {protocol, method, url, params, query, ip, rawUrl} = requestData, sender = requestData.sender;
-	const data = requestData.body;
-	if (!url) {
+	if (!requestData.url) {
 		return {
 			code: 403,
 			error: "Empty Request URL",
 		}
 	}
 
-	const handler = InnerResponsor[url] || ServiceResponsor[url];
-	if (!handler) {
-		return {
-			code: 404,
-			error: "No such service",
+	const handler = InnerResponsor[requestData.url];
+	if (!!handler) {
+		try {
+			const reply = await handler(requestData.body, requestData.query, requestData.params, requestData.protocol, requestData.method, requestData.ip, requestData.host, requestData.sender);
+			return reply;
+		}
+		catch (err) {
+			logger.error('Service Response Failed:', err);
+			return {
+				code: 500,
+				error: "Something wrong...",
+			}
 		}
 	}
 
-	try {
-		const reply = await handler(data, query, params, protocol, method, ip, sender);
-		return reply;
-	}
-	catch (err) {
-		logger.error('Service Response Failed: ' + err.message);
-		return {
-			code: 500,
-			error: "Something wrong...",
-		}
-	}
+	return await EventCenter.invoke(requestData);
 };
 const commonErrorHandler = (err) => {
-	logger.error('Event Handler Failed: ' + err.message);
+	logger.error('Event Handler Failed:', err);
 	return {
 		code: 500,
 		error: "service down",
@@ -578,31 +592,22 @@ const start = async (configPath, workerConfigPath, workerCount) => {
 
 		// 通用路由
 		app.use(async (req, res) => {
-			const logger = new Logger('Kernel:Common');
 			const protocol = req.headers['x-forwarded-proto'] || req.protocol;
 			const ip = req.headers['x-forwarded-for'] || req.ip;
-			const msg = convertParma(req.body);
-			if (!isObject(msg) || !msg.event) {
-				if (!res.headersSent) res.status(400).send({
-					code: 400,
-					error: "Invalid request"
-				});
-				return;
-			}
+			const msg = convertParma(req.body || "");
 			try {
-				const rid = msg.rid;
 				const reply = await requestHandler({
 					protocol: protocol,
 					method: req.method,
 					url: req.path,
 					params: req.params,
 					query: req.query,
-					body: msg.data,
+					body: msg,
 					ip: ip,
-					rawUrl: `${protocol}://${req.get('host')}${req.originalUrl}`,
+					host: `${protocol}://${req.get('host')}:${req.get('port') || '0'}`,
+					rawUrl: `${protocol}://${req.get('host')}:${req.get('port') || '0'}${req.originalUrl}`,
 					sender: () => {},
 				});
-				if (rid) reply.rid = rid;
 				if (!res.headersSent) res.status(200).send(reply);
 			}
 			catch (err) {
@@ -617,7 +622,7 @@ const start = async (configPath, workerConfigPath, workerCount) => {
 			const httpServer = http.createServer(app);
 			wsPorts = config.http.port;
 			httpServer.listen(config.http.port, () => logger.log(`HTTP Server listening on port ${config.http.port}`));
-			if (config.ws?.enabled) setupWebSocketServer(httpServer);
+			if (config.ws?.enabled) setupWebSocketServer(httpServer, config.http.port);
 		}
 
 		// HTTPS 服务器
@@ -627,10 +632,10 @@ const start = async (configPath, workerConfigPath, workerCount) => {
 				const options = { key: fs.readFileSync(config.https.key), cert: fs.readFileSync(config.https.cert) };
 				const httpsServer = https.createServer(options, app);
 				httpsServer.listen(config.https.port, () => logger.log(`HTTPS Server listening on port ${config.https.port}`));
-				if (config.ws?.enabled) setupWebSocketServer(httpsServer);
+				if (config.ws?.enabled) setupWebSocketServer(httpsServer, config.https.port);
 			}
 			catch (error) {
-				logger.error(`Could not start HTTPS server: ${error.message}`);
+				logger.error("Could not start HTTPS server:", error);
 			}
 		}
 	}
@@ -657,13 +662,28 @@ const start = async (configPath, workerConfigPath, workerCount) => {
 
 	// 集群内部通讯
 	if (!!config.shakehand?.ipc) {
+		ShakeHandHosts.push('ipc://' + config.shakehand.ipc);
 		initTasks.push(setupIPCServer(config.shakehand.ipc));
 	}
-	if (!!config.shakehand?.ws && config.shakehand.ws !== wsPorts) {
-		const http = require('http');
-		httpServer.listen(config.shakehand.ws, () => logger.log(`HTTP Server listening on port ${config.shakehand.ws}`));
-		setupWebSocketServer(httpServer);
+	if (!!config.shakehand?.ws) {
+		ShakeHandHosts.push('ws://' + config.shakehand.ws);
+		if (config.shakehand.ws !== wsPorts) {
+			initTasks.push((async () => {
+				const http = require('http');
+				const httpServer = http.createServer();
+				httpServer.listen(config.shakehand.ws, () => logger.log(`HTTP Server listening on port ${config.shakehand.ws}`));
+				setupWebSocketServer(httpServer, config.shakehand.ws);
+			}) ());
+		}
 	}
+
+	// 处理主节点级响应事件
+	if (!!config.handlers) {
+		initTasks.push(EventCenter.amount(config.handlers));
+	}
+
+	await Promise.all(initTasks);
+	logger.log(`Kernel node starting with ID: ${EgoNodeId}`);
 
 	// 使用 Cluster 模式启动 Worker
 	if (!!workerConfigPath && (await fileExists(workerConfigPath))) {
@@ -674,19 +694,18 @@ const start = async (configPath, workerConfigPath, workerCount) => {
 		else {
 			workerCount = Math.max(count - 2, 1);
 		}
-		if (workerConfigPath.match(/^\./)) workerConfigPath = path.join(process.cwd(), workerConfigPath);
 
 		logger.log('Launch Worker: ' + workerCount);
 		cluster.setupPrimary({
 			exec: path.join(__dirname, 'workerNode.js')
 		});
 		for (let i = 0; i < workerCount; i ++) {
-			setupSubProcessServer(cluster.fork({config: workerConfigPath}), workerConfigPath);
+			setupSubProcessServer(cluster.fork({
+				rootPath: process.cwd(),
+				config: workerConfigPath
+			}), workerConfigPath);
 		}
 	}
-
-	await Promise.all(initTasks);
-	logger.log(`Kernel node starting with ID: ${EgoNodeId}`);
 };
 
 module.exports = {
@@ -695,7 +714,7 @@ module.exports = {
 
 // TEST
 InnerResponsor['/test'] = (data) => {
-	console.log(data);
+	(new Logger('Kernel:Test')).log(data);
 	return {
 		ok: true,
 		data: ">>> [" + data + ']'
