@@ -11,6 +11,8 @@ const logger = new Logger('Worker' + (cluster.isWorker ? '-' + process.pid : '')
 const { generateNodeId, getIPAddress } = require('../common/identity');
 const EgoNodeId = generateNodeId();
 
+const EventCenter = require('./eventCenter');
+
 let rootPath = process.cwd();
 let kernelRelation = 0; // 0: Other node; 1: Same node other process; 2: Same node same process.
 let kernelConnection = null;
@@ -146,9 +148,6 @@ const start = async (configPath) => {
 		}
 	}
 
-	/* 其他初始化处理 */
-	let data = {};
-
 	if (kernelRelation === 0) {
 		await prepareWS(config.master.host, config.master.ws);
 	}
@@ -162,9 +161,16 @@ const start = async (configPath) => {
 		return;
 	}
 
+	/* 加载响应实体 */
+	let serviceList = [];
+	if (!!config.handlers) {
+		await EventCenter.amount(config.handlers);
+		serviceList = EventCenter.getServiceList();
+	}
+
 	const reShakeHand = await kernelConnection.sendAndWait('/synego/shakehand', {
 		nid: EgoNodeId,
-		data
+		data: {serviceList},
 	});
 	logger.log('|====---::>', reShakeHand);
 };

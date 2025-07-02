@@ -104,7 +104,7 @@ const callHandlerInPool = (handler, request) => new Promise((res, rej) => {
 		data[key] = request[key];
 	}
 
-	const tag = handler.file + '::' + handler.name;
+	const tag = handler.filepath + '::' + handler.name;
 	const worker = ThreadPool[tag];
 	if (!worker) {
 		return rej({
@@ -128,13 +128,13 @@ const createThreadPool = handler => {
 	worker.on('message', msg => {
 		if (msg.event === '/amount') {
 			if (msg.success) {
-				const tag = handler.file + '::' + handler.name;
+				const tag = handler.filepath + '::' + handler.name;
 				if (!!ThreadPool[tag]) ThreadPool[tag].terminate();
 				ThreadPool[tag] = worker;
-				logger.log('Handler (' + handler.js + ' :: ' + handler.name + ' Amount Successfully!');
+				logger.log('Handler (' + handler.filepath + ' :: ' + handler.name + ') Amount Successfully!');
 			}
 			else {
-				logger.warn('Amount Handler (' + handler.js + ' :: ' + handler.name + ' Failed!');
+				logger.warn('Amount Handler (' + handler.filepath + ' :: ' + handler.name + ' Failed!');
 				worker.terminate();
 			}
 		}
@@ -155,9 +155,9 @@ const createThreadPool = handler => {
 		logger.error('Thread Pool Error:', err);
 	});
 	worker.on('close', () => {
-		const tag = handler.file + '::' + handler.name;
+		const tag = handler.filepath + '::' + handler.name;
 		delete ThreadPool[tag];
-		logger.error('Thread Worker ' + handler.file + '::' + handler.name + ' Closed');
+		logger.error('Thread Worker ' + handler.filepath + '::' + handler.name + ' Closed');
 		createThreadPool(handler);
 	});
 };

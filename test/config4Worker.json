@@ -4,5 +4,6 @@
 		"ws": 3100,
 		"ipc": "\\\\.\\pipe\\synego_communicate_ipc",
 		"ipc_linux": "/tmp/synego_communicate.sock"
-	}
+	},
+	"handlers": "./handlers"
 }

@@ -1,4 +1,8 @@
+require('../../common/logger');
+const logger = new Logger('TESTER');
+
 const testHandler = (data, url, query, params, protocol, method, remoteIP, host, sender) => {
+	logger.log(protocol + '://' + url + ' said (' + method + ") to " + host + ': ' + JSON.stringify(data));
 	return protocol + '://' + url + ' said (' + method + ") to " + host + ': ' + JSON.stringify(data);
 };
 
