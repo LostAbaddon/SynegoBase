@@ -51,13 +51,13 @@
 			"pass_to": "http://localhost:3000/"
 		},
 		{
-			"enabled": true,
+			"enabled": false,
 			"type": "grpc",
 			"url_path": "/grpc",
 			"pass_to": "grpc://localhost:3002"
 		},
 		{
-			"enabled": true,
+			"enabled": false,
 			"type": "tcp",
 			"port": 12345,
 			"pass_to": "localhost:3003",
@@ -65,7 +65,7 @@
 			"connect_timeout": "5s"
 		},
 		{
-			"enabled": true,
+			"enabled": false,
 			"type": "udp",
 			"port": 12346,
 			"pass_to": "localhost:3004"

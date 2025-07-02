@@ -19,7 +19,7 @@ module.exports = {
 			url: "/api/test",
 			onlyFullPath: true,
 			concurrent: 3,
-			threadMode: 1, // 0: inside process; 1: one-time thread; 2: shared thread pool
+			threadMode: 2, // 0: inside process; 1: one-time thread; 2: shared thread pool
 			handler: testHandler,
 		}
 	]

@@ -5,6 +5,8 @@ const { Worker } = require('worker_threads');
 const logger = new Logger('EventCenter');
 
 const EventHandlerList = [];
+const ThreadPool = {};
+const TaskPool = {};
 
 const loadHandlersInFolder = async (filelist, folderPath) => {
 	const indexFile = path.join(folderPath, 'index.js');
@@ -44,11 +46,16 @@ const amountHandlerFile = async (filepath) => {
 		if (!(handler.concurrent > 0)) handler.concurrent = 0;
 		if (!(handler.threadMode > 0)) handler.threadMode = 0;
 		else handler.threadMode = Math.floor(Math.min(handler.threadMode, 3));
+		handler.threadMode = 2;
 		handler.running = 0;
 		handler.pendding = [];
 		handler.wait = () => new Promise(res => handler.pendding.push(res));
 		handler.filepath = filepath;
 		EventHandlerList.push(handler);
+
+		if (handler.threadMode === 2) {
+			createThreadPool(handler);
+		}
 	});
 };
 
@@ -77,7 +84,7 @@ const callHandlerInThread = (handler, request) => new Promise((res, rej) => {
 	});
 	worker.on('message', msg => {
 		if (msg.success) {
-			res(msg.result);
+			res(msg.data);
 		}
 		else {
 			rej(msg);
@@ -90,15 +97,81 @@ const callHandlerInThread = (handler, request) => new Promise((res, rej) => {
 		rej(err);
 	});
 });
+const callHandlerInPool = (handler, request) => new Promise((res, rej) => {
+	const data = {};
+	for (let key in request) {
+		if (key === 'sender') continue;
+		data[key] = request[key];
+	}
+
+	const tag = handler.file + '::' + handler.name;
+	const worker = ThreadPool[tag];
+	if (!worker) {
+		return rej({
+			code: 500,
+			error: "Missing Handler",
+		});
+	}
+
+	const tid = newID();
+	TaskPool[tid] = {res, rej};
+	worker.postMessage({ event: 'task', tid, data });
+});
+const createThreadPool = handler => {
+	const logger = new Logger('ThreadPool');
+	const worker = new Worker(path.resolve(__dirname, 'threadPoolMonitor.js'), {
+		workerData: {
+			js: handler.filepath,
+			name: handler.name,
+		}
+	});
+	worker.on('message', msg => {
+		if (msg.event === '/amount') {
+			if (msg.success) {
+				const tag = handler.file + '::' + handler.name;
+				if (!!ThreadPool[tag]) ThreadPool[tag].terminate();
+				ThreadPool[tag] = worker;
+				logger.log('Handler (' + handler.js + ' :: ' + handler.name + ' Amount Successfully!');
+			}
+			else {
+				logger.warn('Amount Handler (' + handler.js + ' :: ' + handler.name + ' Failed!');
+				worker.terminate();
+			}
+		}
+		else if (msg.event === '/reply') {
+			const promise = TaskPool[msg.tid];
+			delete TaskPool[msg.tid];
+			if (!!promise) {
+				if (msg.reply.success) {
+					promise.res(msg.reply.data);
+				}
+				else {
+					promise.rej(msg.reply);
+				}
+			}
+		}
+	});
+	worker.on('error', err => {
+		logger.error('Thread Pool Error:', err);
+	});
+	worker.on('close', () => {
+		const tag = handler.file + '::' + handler.name;
+		delete ThreadPool[tag];
+		logger.error('Thread Worker ' + handler.file + '::' + handler.name + ' Closed');
+		createThreadPool(handler);
+	});
+};
 const callHandler = async (handler, request) => {
 	try {
 		let reply;
-		handler.threadMode = 2;
 		if (handler.threadMode === 0) {
 			reply = await handler.handler(request.body, request.url, request.query, request.params, request.protocol, request.method, request.remoteIP, request.host);
 		}
 		else if (handler.threadMode === 1) {
 			reply = await callHandlerInThread(handler, request);
+		}
+		else if (handler.threadMode === 2) {
+			reply = await callHandlerInPool(handler, request);
 		}
 		return reply;
 	}

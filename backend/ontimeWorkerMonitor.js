@@ -20,21 +20,23 @@ const doJob = async () => {
 		return;
 	}
 
+	let reply;
 	try {
 		const data = workerData.data;
-		const reply = await handler.handler(data.body, data.url, data.query, data.params, data.protocol, data.method, data.remoteIP, data.host);
-		parentPort.postMessage({
+		reply = await handler.handler(data.body, data.url, data.query, data.params, data.protocol, data.method, data.remoteIP, data.host);
+		reply = {
 			success: true,
-			result: reply,
-		});
+			data: reply,
+		};
 	}
 	catch (err) {
 		logger.error('Do Task Failed:', err);
-		parentPort.postMessage({
+		reply = {
 			code: 500,
 			error: "worker down...",
-		});
+		};
 	}
+	parentPort.postMessage(reply);
 };
 
 doJob();

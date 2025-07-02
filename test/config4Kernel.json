@@ -17,18 +17,18 @@
 		"port": 3002
 	},
 	"udp": {
-		"enabled": true,
+		"enabled": false,
 		"port": 3003
 	},
 	"grpc": {
-		"enabled": true,
+		"enabled": false,
 		"port": 3004,
 		"proto": "grpc.proto"
 	},
 	"cli": {
 		"enabled": true,
-		"ipc_path_win": "\\\\.\\pipe\\synego_kernel_ipc",
-		"ipc_path": "/tmp/synego_kernel.sock"
+		"ipc_path": "\\\\.\\pipe\\synego_kernel_ipc",
+		"ipc_path_linux": "/tmp/synego_kernel.sock"
 	},
 	"upload": {
 		"enabled": true,
@@ -37,8 +37,8 @@
 	},
 	"shakehand": {
 		"ws": 3100,
-		"ipc_win": "\\\\.\\pipe\\synego_communicate_ipc",
-		"ipc": "/tmp/synego_communicate.sock"
+		"ipc": "\\\\.\\pipe\\synego_communicate_ipc",
+		"ipc_linux": "/tmp/synego_communicate.sock"
 	},
 	"handlers": "./handlers"
 }
