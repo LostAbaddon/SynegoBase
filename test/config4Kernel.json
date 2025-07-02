@@ -27,8 +27,8 @@
 	},
 	"cli": {
 		"enabled": true,
-		"ipc_path": "\\\\.\\pipe\\synego_kernel_ipc",
-		"ipc_path_linux": "/tmp/synego_kernel.sock"
+		"ipc_path_win": "\\\\.\\pipe\\synego_kernel_ipc",
+		"ipc_path": "/tmp/synego_kernel.sock"
 	},
 	"upload": {
 		"enabled": true,
@@ -37,7 +37,7 @@
 	},
 	"shakehand": {
 		"ws": 3000,
-		"ipc": "\\\\.\\pipe\\synego_communicate_ipc",
-		"ipc_linux": "/tmp/synego_communicate.sock"
+		"ipc_win": "\\\\.\\pipe\\synego_communicate_ipc",
+		"ipc": "/tmp/synego_communicate.sock"
 	}
 }

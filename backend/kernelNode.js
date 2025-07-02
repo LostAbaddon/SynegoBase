@@ -138,6 +138,9 @@ const setupTCPServer = (port) => new Promise(res => {
 	const server = net.createServer(socket => {
 		const parser = new ProtocolParser(socket);
 		socket.pipe(parser);
+		const sender = (data) => socket.write(JSON.stringify(data) + '\n');
+		sender.id = newID();
+		WorkerGroup[sender.id] = sender;
 
 		parser.on('data', async (message) => {
 			const msg = convertParma(message.toString().trim());
@@ -156,7 +159,7 @@ const setupTCPServer = (port) => new Promise(res => {
 					params: {},
 					query: {},
 					rawUrl: msg.event,
-					sender: (data) => socket.write(JSON.stringify(data) + '\n'),
+					sender,
 				});
 			}
 			catch (err) {
@@ -167,11 +170,14 @@ const setupTCPServer = (port) => new Promise(res => {
 				};
 			}
 			if (rid) reply.rid = rid;
-			socket.write(JSON.stringify(reply) + '\n');
+			sender(reply);
 		});
 
 		socket.on('error', (err) => logger.error('TCP Socket Error: ', err));
-		socket.on('end', () => logger.log(`TCP client from ${parser.realIp} disconnected`));
+		socket.on('end', () => {
+			delete WorkerGroup[sender.id];
+			logger.log(`TCP client from ${parser.realIp} disconnected`);
+		});
 	});
 
 	server.listen(port, () => {
@@ -310,7 +316,11 @@ const setupIPCServer = (ipc_path) => new Promise(async res => {
 
 	const net = require('net');
 	const ipcServer = net.createServer((socket) => {
-		logger.log('CLI client connected via IPC.');
+		const sender = (data) => socket.write(JSON.stringify(data) + '\n');
+		sender.id = newID();
+		WorkerGroup[sender.id] = sender;
+		logger.log('IPC client connected.');
+
 		socket.on('data', async (data) => {
 			const msg = convertParma(data.toString().trim());
 			if (!isObject(msg) || !msg.event) {
@@ -328,7 +338,7 @@ const setupIPCServer = (ipc_path) => new Promise(async res => {
 					params: {},
 					query: {},
 					rawUrl: msg.event,
-					sender: (data) => socket.write(JSON.stringify(data) + '\n'),
+					sender,
 				});
 			}
 			catch (err) {
@@ -339,10 +349,13 @@ const setupIPCServer = (ipc_path) => new Promise(async res => {
 				};
 			}
 			if (rid) reply.rid = rid;
-			socket.write(JSON.stringify(reply) + '\n');
+			sender(reply);
 		});
 		socket.on('end', () => logger.log('CLI client disconnected.'));
-		socket.on('error', (err) => logger.error('IPC Socket Error:', err));
+		socket.on('error', (err) => {
+			delete WorkerGroup[sender.id];
+			logger.error('IPC Socket Error:', err);
+		});
 	});
 	ipcServer.listen(ipcPath, () => {
 		logger.log(`IPC server listening on ${ipcPath}`);
@@ -359,7 +372,12 @@ const setupWebSocketServer = (server) => {
 	const WebSocket = require('ws');
 	const wss = new WebSocket.Server({ server });
 	wss.on('connection', (ws, req) => {
+		const sender = (data) => ws.send(JSON.stringify(data));
+		sender.id = newID();
+		WorkerGroup[sender.id] = sender;
 		const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+		logger.log(`WebSocket client connected from ${ip}`);
+
 		ws.on('message', async (message) => {
 			const msg = convertParma(message.toString().trim());
 			if (!isObject(msg) || !msg.event) {
@@ -377,7 +395,7 @@ const setupWebSocketServer = (server) => {
 					params: {},
 					query: {},
 					rawUrl: msg.event,
-					sender: (data) => ws.send(JSON.stringify(data)),
+					sender,
 				});
 			}
 			catch (err) {
@@ -388,12 +406,12 @@ const setupWebSocketServer = (server) => {
 				};
 			}
 			if (rid) reply.rid = rid;
-			ws.send(JSON.stringify(reply));
+			sender(reply);
 		});
 		ws.on('close', () => {
+			delete WorkerGroup[sender.id];
 			logger.log(`WebSocket client disconnected: ${ip}`);
 		});
-		logger.log(`WebSocket client connected from ${ip}`);
 	});
 	logger.log(`WebSocket Server attached to ${server instanceof https.Server ? 'HTTPS' : 'HTTP'} server.`);
 };
