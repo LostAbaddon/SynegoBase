@@ -482,6 +482,7 @@ const commonErrorHandler = (err) => {
 const start = async (configPath, workerConfigPath, workerCount) => {
 	const config = await loadConfig(configPath, DefaultConfig);
 	const initTasks = [];
+	let wsPorts = null;
 
 	// HTTP/HTTPS/WS 服务器
 	if ((config.http?.enabled && config.http?.port) || (config.https?.enabled && config.https?.port) || (config.upload?.enabled && config.upload?.urlpath)) {
@@ -614,6 +615,7 @@ const start = async (configPath, workerConfigPath, workerCount) => {
 		if (config.http?.enabled && config.http?.port) {
 			const http = require('http');
 			const httpServer = http.createServer(app);
+			wsPorts = config.http.port;
 			httpServer.listen(config.http.port, () => logger.log(`HTTP Server listening on port ${config.http.port}`));
 			if (config.ws?.enabled) setupWebSocketServer(httpServer);
 		}
@@ -654,8 +656,13 @@ const start = async (configPath, workerConfigPath, workerCount) => {
 	}
 
 	// 集群内部通讯
-	if (config.shakehand?.ipc) {
+	if (!!config.shakehand?.ipc) {
 		initTasks.push(setupIPCServer(config.shakehand.ipc));
+	}
+	if (!!config.shakehand?.ws && config.shakehand.ws !== wsPorts) {
+		const http = require('http');
+		httpServer.listen(config.shakehand.ws, () => logger.log(`HTTP Server listening on port ${config.shakehand.ws}`));
+		setupWebSocketServer(httpServer);
 	}
 
 	// 使用 Cluster 模式启动 Worker

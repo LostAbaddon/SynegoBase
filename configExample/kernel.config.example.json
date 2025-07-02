@@ -37,5 +37,6 @@
 	"shakehand": {
 		"ws": 3000,
 		"ipc": "/tmp/synego_communicate.sock"
-	}
+	},
+	"handlers": "folder for handlers"
 }

@@ -155,9 +155,6 @@ const start = async (configPath) => {
 	}
 	else if (kernelRelation === 2) {
 		prepareWorker();
-		wait(3000).then(() => {
-			process.exit();
-		});
 	}
 	else {
 		return;
