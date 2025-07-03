@@ -289,6 +289,19 @@ async function generateNginxConfig(config, callingProjectRoot) {
 	});
 
 	locationBlocks.sort((ba, bb) => ba[0] - bb[0]);
+
+	// 额外 location 信息
+	if (!!config.extras) {
+		if (!isArray(config.extras)) config.extras = [config.extras];
+		config.extras.forEach(extra => {
+			if (!extra || !extra.url || !extra.location) return;
+			locationBlocks.push(['', `
+		location ${extra.url} {
+			${extra.location}
+		}`]);
+		});
+	}
+
 	const locations = locationBlocks.map(block => block[1]).join('');
 	const grpcs     = grpcBlocks.join('');
 	const streams   = streamBlocks.length > 0 ? 'stream {' + streamBlocks.join('') + '\n}' : '';
