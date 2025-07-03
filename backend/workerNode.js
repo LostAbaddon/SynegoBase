@@ -30,7 +30,7 @@ const DefaultConfig = {
 const Pendings = {};
 
 // --- 准备与后台的连接 ---
-const onChannelMessage = (message) => {
+const onChannelMessage = async (message) => {
 	const data = isObject(message) ? message : convertParma(message.toString());
 	const rid = data.rid;
 	if (!!rid) {
@@ -39,9 +39,25 @@ const onChannelMessage = (message) => {
 		delete Pendings[rid];
 		if (!!res) res(data);
 	}
-	else {
-		// call event handler...
-		logger.log(`Received:`, data);
+	else if (data.event === '/invokeAction') {
+		const {actionPath, request} = data.data;
+		let reply;
+		try {
+			reply = await EventCenter.invoke(request, actionPath);
+			reply = {
+				success: true,
+				data: reply
+			};
+		}
+		catch (err) {
+			logger.error('Invoke Action Failed:', err);
+			reply = {
+				code: 500,
+				error: "action failed",
+			}
+		}
+		reply.tid = data.tid;
+		kernelConnection.send("/replyAction", reply);
 	}
 };
 const onChannelClosed = () => {

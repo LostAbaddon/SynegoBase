@@ -51,6 +51,7 @@ const amountHandlerFile = async (filepath) => {
 		handler.pendding = [];
 		handler.wait = () => new Promise(res => handler.pendding.push(res));
 		handler.filepath = filepath;
+		handler.actionName = filepath + '::' + handler.name;
 		EventHandlerList.push(handler);
 
 		if (handler.threadMode === 2) {
@@ -104,8 +105,7 @@ const callHandlerInPool = (handler, request) => new Promise((res, rej) => {
 		data[key] = request[key];
 	}
 
-	const tag = handler.filepath + '::' + handler.name;
-	const worker = ThreadPool[tag];
+	const worker = ThreadPool[handler.actionName];
 	if (!worker) {
 		return rej({
 			code: 500,
@@ -128,9 +128,8 @@ const createThreadPool = handler => {
 	worker.on('message', msg => {
 		if (msg.event === '/amount') {
 			if (msg.success) {
-				const tag = handler.filepath + '::' + handler.name;
-				if (!!ThreadPool[tag]) ThreadPool[tag].terminate();
-				ThreadPool[tag] = worker;
+				if (!!ThreadPool[handler.actionName]) ThreadPool[handler.actionName].terminate();
+				ThreadPool[handler.actionName] = worker;
 				logger.log('Handler (' + handler.filepath + ' :: ' + handler.name + ') Amount Successfully!');
 			}
 			else {
@@ -155,8 +154,7 @@ const createThreadPool = handler => {
 		logger.error('Thread Pool Error:', err);
 	});
 	worker.on('close', () => {
-		const tag = handler.filepath + '::' + handler.name;
-		delete ThreadPool[tag];
+		delete ThreadPool[handler.actionName];
 		logger.error('Thread Worker ' + handler.filepath + '::' + handler.name + ' Closed');
 		createThreadPool(handler);
 	});
@@ -183,44 +181,84 @@ const callHandler = async (handler, request) => {
 		}
 	}
 };
-const invokeHandler = async (request) => {
-	const handlers = EventHandlerList.filter(handler => {
-		if (handler.onlyFullPath) {
-			if (handler.url !== request.url) return;
-		}
-		else {
-			if (request.url.indexOf(handler.url) !== 0) return;
-		}
-		if (!!handler.protocol && !handler.protocol.includes(request.protocol)) return;
-		if (!!handler.methods && !handler.methods.includes(request.method)) return;
-		return true;
-	});
-	if (handlers.length === 0) return {
-		code: 404,
-		error: "No such service",
+const activeHandler = async (handler, request) => {
+	if (handler.concurrent > 0 && handler.running >= handler.concurrent) {
+		await handler.wait();
 	}
 
-	handlers.sort((ha, hb) => hb.url.length - ha.url.length);
-	const targetHandler = handlers[0];
-	if (targetHandler.concurrent > 0 && targetHandler.running >= targetHandler.concurrent) {
-		await targetHandler.wait();
-	}
-
-	targetHandler.running ++;
-	const reply = await callHandler(targetHandler, request);
+	handler.running ++;
+	const reply = await callHandler(handler, request);
 	let needWait = true;
-	if (targetHandler.pendding.length === 0) {
-		targetHandler.running --;
+	if (handler.pendding.length === 0) {
+		handler.running --;
 		needWait = false;
 	}
 	if (needWait) {
 		wait(50).then(() => {
-			targetHandler.running --;
-			if (targetHandler.pendding.length === 0) return;
-			if (targetHandler.running >= targetHandler.concurrent) return;
-			const res = targetHandler.pendding.shift();
+			handler.running --;
+			if (handler.pendding.length === 0) return;
+			if (handler.running >= handler.concurrent) return;
+			const res = handler.pendding.shift();
 			res();
 		});
+	}
+
+	return reply;
+};
+const invokeHandler = async (request, onlyOne=true) => {
+	let handlers;
+	if (isString(onlyOne)) {
+		handlers = EventHandlerList.filter(handler => {
+			return handler.actionName === onlyOne;
+		}).map(handler => {
+			return [0, 0, handler];
+		});
+		if (handlers.length === 0) return {
+			code: 404,
+			error: "No such service",
+		}
+	}
+	else {
+		handlers = EventHandlerList.filter(handler => {
+			if (handler.onlyFullPath) {
+				if (handler.url !== request.url) return;
+			}
+			else {
+				if (request.url.indexOf(handler.url) !== 0) return;
+			}
+			if (!!handler.protocol && !handler.protocol.includes(request.protocol)) return;
+			if (!!handler.methods && !handler.methods.includes(request.method)) return;
+			return true;
+		}).map(handler => {
+			const level = handler.url.split('/').filter(p => !!p).length;
+			return [level, handler.url.length, handler];
+		});
+		if (handlers.length === 0) return {
+			code: 404,
+			error: "No such service",
+		}
+	}
+
+	let reply;
+	if (onlyOne) {
+		handlers.sort((ha, hb) => {
+			let diff = hb[0] - ha[0];
+			if (diff !== 0) return diff;
+			return hb[1] - ha[1];
+		});
+		reply = await activeHandler(handlers[0][2], request);
+	}
+	else {
+		handlers.sort((ha, hb) => {
+			let diff = ha[0] - hb[0];
+			if (diff !== 0) return diff;
+			return ha[1] - hb[1];
+		});
+		for (let item of handlers) {
+			const handler = item[2];
+			reply = await activeHandler(handler, request);
+			if (!!reply.code) break;
+		}
 	}
 	return reply;
 };
@@ -230,6 +268,7 @@ const getServiceList = () => EventHandlerList.map(handler => {
 		methods: handler.methods,
 		url: handler.url,
 		onlyFullPath: handler.onlyFullPath,
+		handlerName: handler.filepath + '::' + handler.name,
 	}
 });
 

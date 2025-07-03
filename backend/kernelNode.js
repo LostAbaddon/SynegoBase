@@ -143,7 +143,7 @@ const setupTCPServer = (port) => new Promise(res => {
 				reply = commonErrorHandler(err);
 			}
 			if (rid && reply) reply.rid = rid;
-			sender(reply);
+			if (reply !== undefined) sender(reply);
 		});
 
 		socket.on('error', (err) => logger.error('TCP Socket Error: ', err));
@@ -204,7 +204,7 @@ const setupUDPServer = (port) => new Promise(res => {
 			reply = commonErrorHandler(err);
 		}
 		if (rid && reply) reply.rid = rid;
-		udpServer.send(JSON.stringify(reply), realPort, realIp);
+		if (reply !== undefined) udpServer.send(JSON.stringify(reply), realPort, realIp);
 	});
 	udpServer.on('listening', () => {
 		const address = udpServer.address();
@@ -255,7 +255,7 @@ const setupGRPCServer = (port, protoFilePath) => new Promise(async res => {
 					reply = commonErrorHandler(err);
 				}
 				if (rid && reply) reply.rid = rid;
-				callback(null, { reply: JSON.stringify(reply) });
+				if (reply !== undefined) callback(null, { reply: JSON.stringify(reply) });
 			}
 		});
 		grpcServer.bindAsync(`0.0.0.0:${port}`, grpc.ServerCredentials.createInsecure(), (err, port) => {
@@ -312,7 +312,7 @@ const setupIPCServer = (ipc_path) => new Promise(async res => {
 				reply = commonErrorHandler(err);
 			}
 			if (rid && reply) reply.rid = rid;
-			sender(reply);
+			if (reply !== undefined) sender(reply);
 		});
 		socket.on('end', () => {
 			MemberManager.signOut(sender.id);
@@ -370,7 +370,7 @@ const setupWebSocketServer = (server, port) => {
 				reply = commonErrorHandler(err);
 			}
 			if (rid && reply) reply.rid = rid;
-			sender(reply);
+			if (reply !== undefined) sender(reply);
 		});
 		ws.on('close', () => {
 			MemberManager.signOut(sender.id);
@@ -407,7 +407,7 @@ const setupSubProcessServer = (worker, workerConfigPath) => {
 			reply = commonErrorHandler(err);
 		}
 		if (rid && reply) reply.rid = rid;
-		sender(reply);
+		if (reply !== undefined) sender(reply);
 	});
 	worker.on('exit', () => {
 		MemberManager.signOut(sender.id);
@@ -454,6 +454,25 @@ InnerResponsor['/synego/shakehand'] = (data, query, params, protocol, method, re
 		nodeID: EgoNodeId
 	}
 };
+InnerResponsor['/replyAction'] = (data) => {
+	const tid = data.tid;
+	if (!tid) return;
+
+	let reply;
+	if (!!data.code) {
+		reply = {
+			code: data.code,
+			error: data.error,
+		}
+	}
+	else {
+		reply = {
+			success: data.success,
+			data: data.data,
+		}
+	}
+	MemberManager.resume(tid, reply);
+};
 
 // --- 统一请求处理函数 ---
 const requestHandler = async (requestData) => {
@@ -479,7 +498,10 @@ const requestHandler = async (requestData) => {
 		}
 	}
 
-	return await EventCenter.invoke(requestData);
+	const check = await EventCenter.invoke(requestData, false);
+	if (!!check.code && check.code !== 404) return check;
+
+	return await MemberManager.invoke(requestData);
 };
 const commonErrorHandler = (err) => {
 	logger.error('Event Handler Failed:', err);
@@ -608,7 +630,7 @@ const start = async (configPath, workerConfigPath, workerCount) => {
 					rawUrl: `${protocol}://${req.get('host')}:${req.get('port') || '0'}${req.originalUrl}`,
 					sender: () => {},
 				});
-				if (!res.headersSent) res.status(200).send(reply);
+				if (!res.headersSent && reply !== undefined) res.status(200).send(reply);
 			}
 			catch (err) {
 				const reply = commonErrorHandler(err);
