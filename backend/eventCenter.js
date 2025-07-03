@@ -9,6 +9,8 @@ const ThreadPool = {};
 const TaskPool = {};
 
 const loadHandlersInFolder = async (filelist, folderPath) => {
+	if (!(await fileExists(folderPath))) return;
+
 	const indexFile = path.join(folderPath, 'index.js');
 	if (await fileExists(indexFile)) {
 		filelist.push(indexFile);

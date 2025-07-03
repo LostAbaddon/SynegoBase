@@ -65,47 +65,7 @@ class ProtocolParser extends Transform {
 }
 
 // --- 默认配置 ---
-const DefaultConfig = {
-	"http": {
-		"enabled": true,
-		"port": 3000
-	},
-	"https": {
-		"enabled": false,
-		"port": 3001,
-		"key": "key.pem",
-		"cert": "cert.pem"
-	},
-	"ws": {
-		"enabled": true
-	},
-	"tcp": {
-		"enabled": true,
-		"port": 3002
-	},
-	"udp": {
-		"enabled": true,
-		"port": 3003
-	},
-	"grpc": {
-		"enabled": true,
-		"port": 3004,
-		"proto": "service.proto"
-	},
-	"cli": {
-		"enabled": true,
-		"ipc_path": os.platform() === 'win32' ? '\\\\.\\pipe\\synego_kernel_ipc' : '/tmp/synego_kernel.sock'
-	},
-	"upload": {
-		"enabled": true,
-		"urlpath": "/upload-callback",
-		"filepath": "./uploads"
-	},
-	"shakehand": {
-		"ws": 3000,
-		"ipc": "/tmp/synego_communicate.sock"
-	}
-};
+const DefaultConfig = {};
 
 // --- 各模块初始化 ---
 

@@ -19,11 +19,7 @@ let kernelConnection = null;
 
 // --- 默认配置 ---
 const DefaultConfig = {
-	master: {
-		host: "127.0.0.1",
-		ws: 3000,
-		ipc: os.platform() === 'win32' ? '\\\\.\\pipe\\synego_communicate_ipc' : '/tmp/synego_communicate.sock'
-	}
+	master: {}
 };
 
 // Message Center
@@ -142,7 +138,7 @@ const start = async (configPath) => {
 	logger.log(`Service node starting with ID: ${EgoNodeId}`);
 
 	const config = await loadConfig(configPath, DefaultConfig);
-	if (!config || !config.master || !config.master.host) {
+	if (!cluster.isWorker && (!config || !config.master || !config.master.host)) {
 		logger.error('Invalid Config File');
 		return;
 	}
@@ -188,7 +184,9 @@ const start = async (configPath) => {
 		nid: EgoNodeId,
 		data: {serviceList},
 	});
-	logger.log('|====---::>', reShakeHand);
+	if (reShakeHand.success !== true) {
+		return process.exit();
+	}
 };
 
 module.exports = {

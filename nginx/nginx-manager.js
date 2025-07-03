@@ -30,7 +30,7 @@ const DefaultConfig = {
 	],
 	spa_serving: [],
 	upload: {},
-	reverse_proxy: [{ enabled: true, url_path: "/", pass_to: "http://localhost:3000" }]
+	reverse_proxy: []
 };
 
 // Helper to run shell commands
